@@ -158,6 +158,18 @@ pub const MetadataMap = struct {
         try indexes_entry.value_ptr.append(self.allocator, entry_index);
     }
 
+    pub fn putReplaceFirst(self: *MetadataMap, name: []const u8, new_value: []const u8) !void {
+        const entry_index_list = (self.name_to_indexes.getPtr(name)) orelse return error.FieldNotFound;
+        if (entry_index_list.items.len == 0) return error.FieldNotFound;
+
+        const entry_index = entry_index_list.items[0];
+        var entry = &self.entries.items[entry_index];
+
+        const new_value_dup = try self.allocator.dupe(u8, new_value);
+        self.allocator.free(entry.value);
+        entry.value = new_value_dup;
+    }
+
     pub fn contains(self: *MetadataMap, name: []const u8) bool {
         return self.name_to_indexes.contains(name);
     }
@@ -231,6 +243,10 @@ test "metadata map" {
     try std.testing.expect(!metadata.contains("missing"));
 
     std.debug.print("{s}\n", .{joined_date});
+
+    try metadata.putReplaceFirst("date", "2019");
+    const new_date = metadata.getFirst("date").?;
+    try std.testing.expectEqualStrings("2019", new_date);
 
     metadata.dump();
 }

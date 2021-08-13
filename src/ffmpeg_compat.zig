@@ -34,10 +34,8 @@ pub fn coalesceMetadata(allocator: *Allocator, metadata: *AllMetadata) !Metadata
                         try coalesced.put(name, entry.value);
                     }
                 }
-                if (!coalesced.contains("date")) {
-                    try mergeDate(&coalesced);
-                }
             }
+            try mergeDate(&coalesced);
         } else if (metadata.id3v1_metadata) |*id3v1_metadata| {
             // just a clone
             for (id3v1_metadata.metadata.entries.items) |entry| {
@@ -92,7 +90,7 @@ fn mergeDate(metadata: *MetadataMap) !void {
         }
     }
 
-    try metadata.put("date", date);
+    try metadata.putReplaceFirst("date", date);
 }
 
 const flac_field_names = std.ComptimeStringMap([]const u8, .{
