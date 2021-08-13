@@ -9,7 +9,7 @@ const unsynch = @import("unsynch.zig");
 const ffmpeg_compat = @import("ffmpeg_compat.zig");
 const Allocator = std.mem.Allocator;
 
-const start_testing_at_prefix = "death before dishonor";
+const start_testing_at_prefix = "dead and buried";
 
 test "music folder" {
     const allocator = std.testing.allocator;
@@ -70,6 +70,7 @@ const ignored_fields = std.ComptimeStringMap(void, .{
     .{"MusicMatch_TrackArtist"}, // this came from a COMM frame
     .{"CDDB Disc ID"}, // this came from a COMM frame
     .{"ID3v1"}, // this came from a COMM frame
+    .{"c0"}, // this came from a COMM frame
 });
 
 fn compareMetadata(allocator: *Allocator, expected: *MetadataArray, actual: *MetadataMap) !void {
@@ -203,7 +204,7 @@ fn getFFProbeMetadata(allocator: *std.mem.Allocator, cwd: ?std.fs.Dir, filepath:
 
 test "ffprobe compare" {
     const allocator = std.testing.allocator;
-    const filepath = "/media/drive4/music/Descolada - Descolada (2006) - V3/01 - You Talk Perty.mp3";
+    const filepath = "/media/drive4/music/dead and buried - bloodless/01-dead and buried-they all turn cold.mp3";
     var probed_metadata = getFFProbeMetadata(allocator, null, filepath) catch |e| switch (e) {
         error.NoMetadataFound => MetadataArray.init(allocator),
         else => return e,

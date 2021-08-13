@@ -30,11 +30,11 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
         return error.InvalidIdentifier;
     }
 
-    const song_name = nulTerminated(data[3..33]);
-    const artist = nulTerminated(data[33..63]);
-    const album_name = nulTerminated(data[63..93]);
-    const year = nulTerminated(data[93..97]);
-    const comment = nulTerminated(data[97..127]);
+    const song_name = std.mem.trimRight(u8, nulTerminated(data[3..33]), " ");
+    const artist = std.mem.trimRight(u8, nulTerminated(data[33..63]), " ");
+    const album_name = std.mem.trimRight(u8, nulTerminated(data[63..93]), " ");
+    const year = std.mem.trimRight(u8, nulTerminated(data[93..97]), " ");
+    const comment = std.mem.trimRight(u8, nulTerminated(data[97..127]), " ");
     const could_be_v1_1 = data[125] == '\x00';
     const track_num = data[126];
     const genre = data[127];
