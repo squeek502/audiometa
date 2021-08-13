@@ -1,5 +1,5 @@
 const std = @import("std");
-const id3 = @import("id3.zig");
+const id3 = @import("id3v2.zig");
 const flac = @import("flac.zig");
 const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
 const MetadataMap = @import("metadata.zig").MetadataMap;
