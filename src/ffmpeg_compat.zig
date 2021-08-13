@@ -30,8 +30,16 @@ pub fn coalesceMetadata(allocator: *Allocator, metadata: *AllMetadata) !Metadata
             for (id3v2_metadata_list) |*id3v2_metadata_container| {
                 const id3v2_metadata = &id3v2_metadata_container.data.metadata;
                 for (id3v2_metadata.entries.items) |entry| {
-                    const name = convert_id_to_name(entry.name, id3v2_metadata_container.major_version) orelse entry.name;
-                    if (!coalesced.contains(name)) {
+                    const converted_name = convert_id_to_name(entry.name);
+                    const name = converted_name orelse entry.name;
+                    // a bit weird, but since ffmpeg only converts at the end, we need to
+                    // emulate that by checking if the conversion would replace something
+                    // that exists in the tag already
+                    const would_converted_name_replace_something = blk: {
+                        if (converted_name == null) break :blk false;
+                        break :blk id3v2_metadata.contains(converted_name.?);
+                    };
+                    if (!would_converted_name_replace_something and !coalesced.contains(name)) {
                         try coalesced.put(name, entry.value);
                     }
                 }
