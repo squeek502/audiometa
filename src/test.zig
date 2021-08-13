@@ -9,7 +9,7 @@ const unsynch = @import("unsynch.zig");
 const ffmpeg_compat = @import("ffmpeg_compat.zig");
 const Allocator = std.mem.Allocator;
 
-const start_testing_at_prefix = "dead and buried";
+const start_testing_at_prefix = "Dystopia - Dystopia (2008)";
 
 test "music folder" {
     const allocator = std.testing.allocator;
@@ -27,6 +27,11 @@ test "music folder" {
             }
         }
         if (entry.kind != .File) continue;
+
+        // bug in ffmpeg; reads the TLEN as 143546 when it is actually "0"
+        if (std.mem.eql(u8, entry.path, "Doomed Future Today/14 - Bombs (Version).mp3")) {
+            continue;
+        }
 
         const extension = std.fs.path.extension(entry.basename);
         const is_mp3 = std.mem.eql(u8, extension, ".mp3");
@@ -71,6 +76,7 @@ const ignored_fields = std.ComptimeStringMap(void, .{
     .{"CDDB Disc ID"}, // this came from a COMM frame
     .{"ID3v1"}, // this came from a COMM frame
     .{"c0"}, // this came from a COMM frame
+    .{"Media Jukebox"}, // this came from a COMM frame
 });
 
 fn compareMetadata(allocator: *Allocator, expected: *MetadataArray, actual: *MetadataMap) !void {
@@ -204,7 +210,7 @@ fn getFFProbeMetadata(allocator: *std.mem.Allocator, cwd: ?std.fs.Dir, filepath:
 
 test "ffprobe compare" {
     const allocator = std.testing.allocator;
-    const filepath = "/media/drive4/music/dead and buried - bloodless/01-dead and buried-they all turn cold.mp3";
+    const filepath = "/media/drive4/music/Dystopia - Dystopia (2008) - V0 [CD]/01-dystopia-now_and_forever.mp3";
     var probed_metadata = getFFProbeMetadata(allocator, null, filepath) catch |e| switch (e) {
         error.NoMetadataFound => MetadataArray.init(allocator),
         else => return e,
@@ -214,17 +220,7 @@ test "ffprobe compare" {
     var file = try std.fs.cwd().openFile(filepath, .{});
     defer file.close();
 
-    var data = try file.readToEndAlloc(allocator, 100 * 1024 * 1024);
-    defer allocator.free(data);
-
-    // var decoded_unsynch_buffer = try allocator.alloc(u8, data.len);
-    // defer allocator.free(decoded_unsynch_buffer);
-
-    // var decoded = unsynch.decode(data, decoded_unsynch_buffer);
-
-    var fixed_buffer_stream = std.io.fixedBufferStream(data);
-
-    var stream_source = std.io.StreamSource{ .buffer = fixed_buffer_stream };
+    var stream_source = std.io.StreamSource{ .file = file };
     var metadata = try meta.readAll(allocator, &stream_source);
     defer metadata.deinit();
 
