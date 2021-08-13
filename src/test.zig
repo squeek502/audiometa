@@ -9,13 +9,23 @@ const unsynch = @import("unsynch.zig");
 const ffmpeg_compat = @import("ffmpeg_compat.zig");
 const Allocator = std.mem.Allocator;
 
+const start_testing_at_prefix = "Conflict - 1985";
+
 test "music folder" {
     const allocator = std.testing.allocator;
     var dir = try std.fs.cwd().openDir("/media/drive4/music/", .{ .iterate = true });
     var walker = try dir.walk(allocator);
     defer walker.deinit();
 
+    var testing_started = false;
     while (try walker.next()) |entry| {
+        if (!testing_started) {
+            if (std.mem.startsWith(u8, entry.path, start_testing_at_prefix)) {
+                testing_started = true;
+            } else {
+                continue;
+            }
+        }
         if (entry.kind != .File) continue;
 
         const extension = std.fs.path.extension(entry.basename);
