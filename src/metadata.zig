@@ -158,9 +158,12 @@ pub const MetadataMap = struct {
         try indexes_entry.value_ptr.append(self.allocator, entry_index);
     }
 
-    pub fn putReplaceFirst(self: *MetadataMap, name: []const u8, new_value: []const u8) !void {
-        const entry_index_list = (self.name_to_indexes.getPtr(name)) orelse return error.FieldNotFound;
-        if (entry_index_list.items.len == 0) return error.FieldNotFound;
+    pub fn putOrReplaceFirst(self: *MetadataMap, name: []const u8, new_value: []const u8) !void {
+        const maybe_entry_index_list = self.name_to_indexes.getPtr(name);
+        if (maybe_entry_index_list == null or maybe_entry_index_list.?.items.len == 0) {
+            return self.put(name, new_value);
+        }
+        const entry_index_list = maybe_entry_index_list.?;
 
         const entry_index = entry_index_list.items[0];
         var entry = &self.entries.items[entry_index];
@@ -244,7 +247,7 @@ test "metadata map" {
 
     std.debug.print("{s}\n", .{joined_date});
 
-    try metadata.putReplaceFirst("date", "2019");
+    try metadata.putOrReplaceFirst("date", "2019");
     const new_date = metadata.getFirst("date").?;
     try std.testing.expectEqualStrings("2019", new_date);
 

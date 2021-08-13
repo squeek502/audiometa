@@ -90,7 +90,7 @@ fn mergeDate(metadata: *MetadataMap) !void {
         }
     }
 
-    try metadata.putReplaceFirst("date", date);
+    try metadata.putOrReplaceFirst("date", date);
 }
 
 const flac_field_names = std.ComptimeStringMap([]const u8, .{
