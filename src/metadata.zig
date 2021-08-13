@@ -1,17 +1,108 @@
 const std = @import("std");
+const id3v2 = @import("id3v2.zig");
+const id3v1 = @import("id3v1.zig");
+const flac = @import("flac.zig");
 const Allocator = std.mem.Allocator;
 const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
+
+pub fn readAll(allocator: *Allocator, stream_source: *std.io.StreamSource) !AllMetadata {
+    var reader = stream_source.reader();
+    var seekable_stream = stream_source.seekableStream();
+
+    var id3v2_metadata: ?[]ID3v2Metadata = id3v2.read(allocator, reader, seekable_stream) catch |e| switch (e) {
+        error.OutOfMemory => |err| return err,
+        else => null,
+    };
+    var id3v1_metadata: ?Metadata = id3v1.read(allocator, reader, seekable_stream) catch |e| switch (e) {
+        error.OutOfMemory => |err| return err,
+        else => null,
+    };
+    // TODO: this isnt correct for id3v2 tags at the end of a file or when a SEEK frame is used
+    var pos_after_last_id3v2: usize = blk: {
+        if (id3v2_metadata) |meta_slice| {
+            if (meta_slice.len > 0) {
+                var last_offset = meta_slice[meta_slice.len - 1].data.end_offset;
+                break :blk last_offset;
+            }
+        }
+        break :blk 0;
+    };
+    try seekable_stream.seekTo(pos_after_last_id3v2);
+    var flac_metadata: ?Metadata = flac.read(allocator, reader, seekable_stream) catch |e| switch (e) {
+        error.OutOfMemory => |err| return err,
+        else => null,
+    };
+
+    return AllMetadata{
+        .allocator = allocator,
+        .id3v2_metadata = id3v2_metadata,
+        .id3v1_metadata = id3v1_metadata,
+        .flac_metadata = flac_metadata,
+    };
+}
+
+pub const AllMetadata = struct {
+    allocator: *Allocator,
+    id3v2_metadata: ?[]ID3v2Metadata,
+    id3v1_metadata: ?Metadata,
+    // TODO rename? xiph? vorbis?
+    flac_metadata: ?Metadata,
+
+    pub fn deinit(self: *AllMetadata) void {
+        if (self.id3v2_metadata) |id3v2_metadata| {
+            for (id3v2_metadata) |*metadata| {
+                metadata.deinit();
+            }
+            self.allocator.free(id3v2_metadata);
+        }
+        if (self.id3v1_metadata) |*id3v1_metadata| {
+            id3v1_metadata.deinit();
+        }
+        if (self.flac_metadata) |*flac_metadata| {
+            flac_metadata.deinit();
+        }
+    }
+};
+
+pub const ID3v2Metadata = struct {
+    data: Metadata,
+    major_version: u8,
+
+    pub fn init(allocator: *Allocator, major_version: u8, start_offset: usize) ID3v2Metadata {
+        return .{
+            .data = Metadata.initWithStartOffset(allocator, start_offset),
+            .major_version = major_version,
+        };
+    }
+
+    pub fn deinit(self: *ID3v2Metadata) void {
+        self.data.deinit();
+    }
+};
 
 pub const Metadata = struct {
     metadata: MetadataMap,
     start_offset: usize,
     end_offset: usize,
 
+    pub fn init(allocator: *Allocator) Metadata {
+        return Metadata.initWithStartOffset(allocator, undefined);
+    }
+
+    pub fn initWithStartOffset(allocator: *Allocator, start_offset: usize) Metadata {
+        return .{
+            .metadata = MetadataMap.init(allocator),
+            .start_offset = start_offset,
+            .end_offset = undefined,
+        };
+    }
+
     pub fn deinit(self: *Metadata) void {
         self.metadata.deinit();
     }
 };
 
+/// HashMap-like but can handle multiple values with the same key.
 pub const MetadataMap = struct {
     allocator: *Allocator,
     entries: EntryList,
@@ -71,15 +162,33 @@ pub const MetadataMap = struct {
         return self.name_to_indexes.contains(name);
     }
 
+    pub fn valueCount(self: *MetadataMap, name: []const u8) ?usize {
+        const entry_index_list = (self.name_to_indexes.getPtr(name)) orelse return null;
+        return entry_index_list.items.len;
+    }
+
+    pub fn getAllAlloc(self: *MetadataMap, allocator: *Allocator, name: []const u8) !?[][]const u8 {
+        const entry_index_list = (self.name_to_indexes.getPtr(name)) orelse return null;
+        if (entry_index_list.items.len == 0) return null;
+
+        const buf = try allocator.alloc([]const u8, entry_index_list.items.len);
+        for (entry_index_list.items) |entry_index, i| {
+            buf[i] = self.entries.items[entry_index].value;
+        }
+        return buf;
+    }
+
     pub fn getFirst(self: *MetadataMap, name: []const u8) ?[]const u8 {
         const entry_index_list = (self.name_to_indexes.getPtr(name)) orelse return null;
         if (entry_index_list.items.len == 0) return null;
+
         const entry_index = entry_index_list.items[0];
         return self.entries.items[entry_index].value;
     }
 
     pub fn getJoinedAlloc(self: *MetadataMap, allocator: *Allocator, name: []const u8, separator: []const u8) !?[]u8 {
         const entry_index_list = (self.name_to_indexes.getPtr(name)) orelse return null;
+        if (entry_index_list.items.len == 0) return null;
         if (entry_index_list.items.len == 1) {
             const entry_index = entry_index_list.items[0];
             const duped_value = try allocator.dupe(u8, self.entries.items[entry_index].value);
@@ -97,38 +206,6 @@ pub const MetadataMap = struct {
         }
     }
 
-    const date_format = "YYYY-MM-DD hh:mm";
-
-    pub fn mergeDate(metadata: *MetadataMap) !void {
-        var date_buf: [date_format.len]u8 = undefined;
-        var date: []u8 = date_buf[0..0];
-
-        var year = metadata.getFirst("TYER") orelse metadata.getFirst("TYE");
-        if (year == null) return;
-        date = date_buf[0..4];
-        std.mem.copy(u8, date, (year.?)[0..4]);
-
-        var maybe_daymonth = metadata.getFirst("TDAT") orelse metadata.getFirst("TDA");
-        if (maybe_daymonth) |daymonth| {
-            date = date_buf[0..10];
-            // TDAT is DDMM, we want -MM-DD
-            var day = daymonth[0..2];
-            var month = daymonth[2..4];
-            _ = try std.fmt.bufPrint(date[4..10], "-{s}-{s}", .{ month, day });
-        }
-
-        var maybe_time = metadata.getFirst("TIME") orelse metadata.getFirst("TIM");
-        if (maybe_time) |time| {
-            date = date_buf[0..];
-            // TIME is HHMM
-            var hours = time[0..2];
-            var mins = time[2..4];
-            _ = try std.fmt.bufPrint(date[10..], " {s}:{s}", .{ hours, mins });
-        }
-
-        try metadata.put("date", date);
-    }
-
     pub fn dump(metadata: *MetadataMap) void {
         for (metadata.entries.items) |entry| {
             std.debug.print("{s}={s}\n", .{ fmtUtf8SliceEscapeUpper(entry.name), fmtUtf8SliceEscapeUpper(entry.value) });
@@ -141,6 +218,8 @@ test "metadata map" {
     var metadata = MetadataMap.init(allocator);
     defer metadata.deinit();
 
+    try std.testing.expect(!metadata.contains("date"));
+
     try metadata.put("date", "2018");
     try metadata.put("date", "2018-04-25");
 
@@ -148,6 +227,8 @@ test "metadata map" {
     defer allocator.free(joined_date);
 
     try std.testing.expectEqualStrings("2018;2018-04-25", joined_date);
+    try std.testing.expect(metadata.contains("date"));
+    try std.testing.expect(!metadata.contains("missing"));
 
     std.debug.print("{s}\n", .{joined_date});
 

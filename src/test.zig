@@ -2,8 +2,11 @@ const std = @import("std");
 const id3 = @import("id3v2.zig");
 const flac = @import("flac.zig");
 const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
-const MetadataMap = @import("metadata.zig").MetadataMap;
+const meta = @import("metadata.zig");
+const MetadataMap = meta.MetadataMap;
+const Metadata = meta.Metadata;
 const unsynch = @import("unsynch.zig");
+const ffmpeg_compat = @import("ffmpeg_compat.zig");
 const Allocator = std.mem.Allocator;
 
 test "music folder" {
@@ -37,19 +40,13 @@ test "music folder" {
         if (size == 0) continue;
 
         var stream_source = std.io.StreamSource{ .file = file };
-        var metadata: MetadataMap = undefined;
-
-        if (is_mp3) {
-            metadata = id3.read(allocator, stream_source.reader(), stream_source.seekableStream()) catch |e| switch (e) {
-                error.InvalidIdentifier => MetadataMap.init(allocator),
-                else => return e,
-            };
-        } else {
-            metadata = try flac.read(allocator, stream_source.reader(), stream_source.seekableStream());
-        }
+        var metadata = try meta.readAll(allocator, &stream_source);
         defer metadata.deinit();
 
-        try compareMetadata(allocator, &expected_metadata, &metadata);
+        var coalesced_metadata = try ffmpeg_compat.coalesceMetadata(allocator, &metadata);
+        defer coalesced_metadata.deinit();
+
+        try compareMetadata(allocator, &expected_metadata, &coalesced_metadata);
     }
 }
 
@@ -70,8 +67,34 @@ fn compareMetadata(allocator: *Allocator, expected: *MetadataArray, actual: *Met
         if (std.mem.startsWith(u8, field.name, "lyrics")) continue;
         if (std.mem.startsWith(u8, field.name, "iTun")) continue;
 
-        if (try actual.getJoinedAlloc(allocator, field.name, ";")) |actual_value| {
-            defer allocator.free(actual_value);
+        if (actual.contains(field.name)) {
+            var num_values = actual.valueCount(field.name).?;
+            var value_needs_free = false;
+            var actual_value: []const u8 = blk: {
+                if (num_values == 1) {
+                    break :blk actual.getFirst(field.name).?;
+                } else {
+                    // hacky, but ffmpeg will not join with ; if all values are empty
+                    // so handle that case here
+                    var all_values = (try actual.getAllAlloc(allocator, field.name)).?;
+                    defer allocator.free(all_values);
+                    var all_empty = all_empty: {
+                        for (all_values) |value| {
+                            if (value.len != 0) break :all_empty false;
+                        }
+                        break :all_empty true;
+                    };
+                    if (all_empty) {
+                        break :blk "";
+                    } else {
+                        var joined_value = (try actual.getJoinedAlloc(allocator, field.name, ";")).?;
+                        value_needs_free = true;
+                        break :blk joined_value;
+                    }
+                }
+            };
+            defer if (value_needs_free) allocator.free(actual_value);
+
             std.testing.expectEqualStrings(field.value, actual_value) catch |e| {
                 std.debug.print("\nexpected:\n", .{});
                 for (expected.array.items) |_field| {
@@ -196,11 +219,11 @@ test "ffprobe compare" {
     var fixed_buffer_stream = std.io.fixedBufferStream(data);
 
     var stream_source = std.io.StreamSource{ .buffer = fixed_buffer_stream };
-    var metadata = id3.read(allocator, stream_source.reader(), stream_source.seekableStream()) catch |e| switch (e) {
-        error.InvalidIdentifier => MetadataMap.init(allocator),
-        else => return e,
-    };
+    var metadata = try meta.readAll(allocator, &stream_source);
     defer metadata.deinit();
 
-    try compareMetadata(allocator, &probed_metadata, &metadata);
+    var coalesced_metadata = try ffmpeg_compat.coalesceMetadata(allocator, &metadata);
+    defer coalesced_metadata.deinit();
+
+    try compareMetadata(allocator, &probed_metadata, &coalesced_metadata);
 }

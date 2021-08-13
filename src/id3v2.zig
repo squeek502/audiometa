@@ -5,10 +5,9 @@ const synchsafe = @import("synchsafe.zig");
 const latin1 = @import("latin1.zig");
 const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
 const unsynch = @import("unsynch.zig");
-const MetadataMap = @import("metadata.zig").MetadataMap;
-const id3v1 = @import("id3v1.zig");
+const ID3v2Metadata = @import("metadata.zig").ID3v2Metadata;
 
-pub const id3_file_identifier = "ID3";
+pub const id3v2_identifier = "ID3";
 
 pub const ID3Header = struct {
     major_version: u8,
@@ -20,7 +19,7 @@ pub const ID3Header = struct {
 
     pub fn read(reader: anytype) !ID3Header {
         const header = try reader.readBytesNoEof(10);
-        if (!std.mem.eql(u8, header[0..3], id3_file_identifier)) {
+        if (!std.mem.eql(u8, header[0..3], id3v2_identifier)) {
             return error.InvalidIdentifier;
         }
         const synchsafe_size = std.mem.readIntSliceBig(u32, header[6..10]);
@@ -113,27 +112,37 @@ pub fn skip(reader: anytype, seekable_stream: anytype) !void {
     return seekable_stream.seekBy(header.size);
 }
 
-pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !MetadataMap {
-    var metadata: MetadataMap = MetadataMap.init(allocator);
-    errdefer metadata.deinit();
+pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![]ID3v2Metadata {
+    var metadata_buf = std.ArrayList(ID3v2Metadata).init(allocator);
+    errdefer {
+        for (metadata_buf.items) |*meta| {
+            meta.deinit();
+        }
+        metadata_buf.deinit();
+    }
 
-    var found_id3v2_tag = false;
     var is_duplicate_tag = false;
 
     while (true) : (is_duplicate_tag = true) {
         const start_offset = try seekable_stream.getPos();
+
         std.debug.print("trying to read header at offset 0x{X}\n", .{try seekable_stream.getPos()});
         const id3_header = ID3Header.read(reader) catch |e| switch (e) {
-            error.InvalidIdentifier => break,
-            error.EndOfStream => if (is_duplicate_tag) {
-                break;
-            } else {
-                return error.EndOfStream;
+            error.EndOfStream, error.InvalidIdentifier => |err| {
+                if (is_duplicate_tag) {
+                    break;
+                } else {
+                    return err;
+                }
             },
             else => |err| return err,
         };
 
-        found_id3v2_tag = true;
+        try metadata_buf.append(ID3v2Metadata.init(allocator, id3_header.major_version, start_offset));
+        var metadata_id3v2_container = &metadata_buf.items[metadata_buf.items.len - 1];
+        var metadata_container = &metadata_id3v2_container.data;
+        var metadata = &metadata_container.metadata;
+
         std.debug.print("tag v2.{}.{} size: 0x{X} flags: {}\n", .{ id3_header.major_version, id3_header.revision_num, id3_header.size, id3_header.flags });
 
         const id3_header_len = ID3Header.len;
@@ -147,11 +156,12 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
         var unsynch_reader = unsynch.unsynchCapableReader(should_read_unsynch, reader);
         var unsynch_capable_reader = unsynch_reader.reader();
 
+        metadata_container.end_offset = start_offset + id3_header_len + id3_header.size;
         // Slightly hacky solution for trailing garbage/padding bytes at the end of the tag. Instead of
         // trying to read a tag that we know is invalid (since frame size has to be > 0
         // excluding the header), we can stop reading once there's not enough space left for
         // a valid tag to be read.
-        const tag_end_with_enough_space_for_valid_frame: usize = start_offset + id3_header_len + id3_header.size - frame_header_len;
+        const tag_end_with_enough_space_for_valid_frame: usize = metadata_container.end_offset - frame_header_len;
         std.debug.print("{} < {}\n", .{ (try seekable_stream.getPos()), tag_end_with_enough_space_for_valid_frame });
         while ((try seekable_stream.getPos()) < tag_end_with_enough_space_for_valid_frame) {
             const frame_header = try FrameHeader.read(unsynch_capable_reader, id3_header.major_version);
@@ -163,6 +173,11 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
                 try seekable_stream.seekTo(start_offset + id3_header_len + id3_header.size);
                 break;
             };
+
+            // this is technically not valid AFAIK but ffmpeg seems to accept
+            // it without failing the parse, so just skip it
+            // TODO: zero sized T-type frames? would ffprobe output that?
+            if (frame_header.size == 0) continue;
 
             // has a text encoding byte at the start
             if (frame_header.id[0] == 'T') {
@@ -178,6 +193,8 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
 
                 const encoding_byte = try unsynch_capable_reader.readByte();
                 text_data_size -= 1;
+
+                std.debug.print("{}\n", .{encoding_byte});
 
                 if (text_data_size == 0) continue;
 
@@ -213,15 +230,11 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
                         };
 
                         const text = it.next().?;
-                        std.debug.print("is_user_defined: {} text: {s}\n", .{ is_user_defined, text });
                         if (is_user_defined) {
                             const value = it.next().?;
-                            if (!is_duplicate_tag or !metadata.contains(text))
-                                try metadata.put(text, value);
+                            try metadata.put(text, value);
                         } else {
-                            const name = convert_id_to_name(id, id3_header.major_version) orelse id;
-                            if (!is_duplicate_tag or !metadata.contains(name))
-                                try metadata.put(name, text);
+                            try metadata.put(id, text);
                         }
                     },
                     1, 2 => { // UTF-16 (1 = with BOM, 2 = without)
@@ -267,7 +280,6 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
                         var utf8_text = try std.unicode.utf16leToUtf8Alloc(allocator, text);
                         defer allocator.free(utf8_text);
 
-                        std.debug.print("is_user_defined: {} text: {s}\n", .{ is_user_defined, utf8_text });
                         if (is_user_defined) {
                             var value = it.next().?;
                             if (has_bom) {
@@ -278,12 +290,9 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
                             var utf8_value = try std.unicode.utf16leToUtf8Alloc(allocator, value);
                             defer allocator.free(utf8_value);
 
-                            if (!is_duplicate_tag or !metadata.contains(utf8_text))
-                                try metadata.put(utf8_text, utf8_value);
+                            try metadata.put(utf8_text, utf8_value);
                         } else {
-                            const name = convert_id_to_name(id, id3_header.major_version) orelse id;
-                            if (!is_duplicate_tag or !metadata.contains(name))
-                                try metadata.put(name, utf8_text);
+                            try metadata.put(id, utf8_text);
                         }
                     },
                     3 => { // UTF-8
@@ -307,15 +316,11 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
                         };
 
                         const text = it.next().?;
-                        std.debug.print("is_user_defined: {} text: {s}\n", .{ is_user_defined, text });
                         if (is_user_defined) {
                             const value = it.next().?;
-                            if (!is_duplicate_tag or !metadata.contains(text))
-                                try metadata.put(text, value);
+                            try metadata.put(text, value);
                         } else {
-                            const name = convert_id_to_name(id, id3_header.major_version) orelse id;
-                            if (!is_duplicate_tag or !metadata.contains(name))
-                                try metadata.put(name, text);
+                            try metadata.put(id, text);
                         }
                     },
                     else => unreachable,
@@ -326,70 +331,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
         }
     }
 
-    if (!found_id3v2_tag) {
-        // try id3v1
-        var id3v1_metadata = try id3v1.read(allocator, reader, seekable_stream);
-        metadata.deinit();
-        return id3v1_metadata;
-    }
-
-    std.debug.print("before mergeDate:\n", .{});
-    metadata.dump();
-    std.debug.print("\n", .{});
-
-    if (!metadata.contains("date")) {
-        try metadata.mergeDate();
-    }
-
-    return metadata;
-}
-
-const id3v2_34_name_lookup = std.ComptimeStringMap([]const u8, .{
-    .{ "TALB", "album" },
-    .{ "TCOM", "composer" },
-    .{ "TCON", "genre" },
-    .{ "TCOP", "copyright" },
-    .{ "TENC", "encoded_by" },
-    .{ "TIT2", "title" },
-    .{ "TLAN", "language" },
-    .{ "TPE1", "artist" },
-    .{ "TPE2", "album_artist" },
-    .{ "TPE3", "performer" },
-    .{ "TPOS", "disc" },
-    .{ "TPUB", "publisher" },
-    .{ "TRCK", "track" },
-    .{ "TSSE", "encoder" },
-    .{ "USLT", "lyrics" },
-});
-
-const id3v2_4_name_lookup = std.ComptimeStringMap([]const u8, .{
-    .{ "TCMP", "compilation" },
-    .{ "TDRC", "date" },
-    .{ "TDRL", "date" },
-    .{ "TDEN", "creation_time" },
-    .{ "TSOA", "album-sort" },
-    .{ "TSOP", "artist-sort" },
-    .{ "TSOT", "title-sort" },
-});
-
-const id3v2_2_name_lookup = std.ComptimeStringMap([]const u8, .{
-    .{ "TAL", "album" },
-    .{ "TCO", "genre" },
-    .{ "TCP", "compilation" },
-    .{ "TT2", "title" },
-    .{ "TEN", "encoded_by" },
-    .{ "TP1", "artist" },
-    .{ "TP2", "album_artist" },
-    .{ "TP3", "performer" },
-    .{ "TRK", "track" },
-});
-
-fn convert_id_to_name(id: []const u8, major_version: u8) ?[]const u8 {
-    switch (major_version) {
-        0...2 => return id3v2_2_name_lookup.get(id),
-        //3 => return id3v2_34_name_lookup.get(id),
-        else => return id3v2_4_name_lookup.get(id) orelse id3v2_34_name_lookup.get(id),
-    }
+    return metadata_buf.toOwnedSlice();
 }
 
 // copy of std.mem.SplitIterator but with a user-supplied type

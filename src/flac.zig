@@ -1,23 +1,25 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
-const id3 = @import("id3v2.zig");
+const id3v2 = @import("id3v2.zig");
 const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
-const MetadataMap = @import("metadata.zig").MetadataMap;
+const Metadata = @import("metadata.zig").Metadata;
 
 const flac_stream_marker = "fLaC";
 const block_type_vorbis_comment = 4;
 
-pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !MetadataMap {
-    var metadata: MetadataMap = MetadataMap.init(allocator);
-    errdefer metadata.deinit();
+pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !Metadata {
+    var metadata_container: Metadata = Metadata.init(allocator);
+    errdefer metadata_container.deinit();
+
+    var metadata = &metadata_container.metadata;
 
     var stream_marker = try reader.readBytesNoEof(4);
 
     // need to skip id3 tags if they exist
-    if (std.mem.eql(u8, stream_marker[0..3], id3.id3_file_identifier)) {
+    if (std.mem.eql(u8, stream_marker[0..3], id3v2.id3v2_identifier)) {
         try seekable_stream.seekTo(0);
-        try id3.skip(reader, seekable_stream);
+        try id3v2.skip(reader, seekable_stream);
         try reader.readNoEof(stream_marker[0..]);
     }
 
@@ -53,12 +55,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
                 var field = split_it.next().?;
                 var value = split_it.rest();
 
-                // vorbis metadata fields are case-insensitive, so convert to uppercase
-                // for the lookup
-                var upper_field = try std.ascii.allocUpperString(allocator, field);
-                defer allocator.free(upper_field);
-
-                try metadata.put(ffmpeg_field_names.get(upper_field) orelse field, value);
+                try metadata.put(field, value);
 
                 user_comment_offset += 4 + comment_length;
             }
@@ -69,15 +66,8 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
         if (is_last_metadata_block) break;
     }
 
-    return metadata;
+    return metadata_container;
 }
-
-const ffmpeg_field_names = std.ComptimeStringMap([]const u8, .{
-    .{ "ALBUMARTIST", "album_artist" },
-    .{ "TRACKNUMBER", "track" },
-    .{ "DISCNUMBER", "disc" },
-    .{ "DESCRIPTION", "comment" },
-});
 
 fn embedReadAndDump(comptime path: []const u8) !void {
     const data = @embedFile(path);

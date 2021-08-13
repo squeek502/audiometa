@@ -5,20 +5,26 @@ const synchsafe = @import("synchsafe.zig");
 const latin1 = @import("latin1.zig");
 const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
 const unsynch = @import("unsynch.zig");
-const MetadataMap = @import("metadata.zig").MetadataMap;
+const Metadata = @import("metadata.zig").Metadata;
 
 pub const id3v1_identifier = "TAG";
 
-pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !MetadataMap {
-    var metadata: MetadataMap = MetadataMap.init(allocator);
-    errdefer metadata.deinit();
+pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !Metadata {
+    var metadata_container: Metadata = Metadata.init(allocator);
+    errdefer metadata_container.deinit();
+
+    var metadata = &metadata_container.metadata;
 
     var end_pos = try seekable_stream.getEndPos();
     if (end_pos < 128) {
         return error.EndOfStream;
     }
 
-    try seekable_stream.seekTo(end_pos - 128);
+    const start_offset = end_pos - 128;
+    metadata_container.start_offset = start_offset;
+    metadata_container.end_offset = end_pos;
+
+    try seekable_stream.seekTo(start_offset);
     const data = try reader.readBytesNoEof(128);
     if (!std.mem.eql(u8, data[0..3], id3v1_identifier)) {
         return error.InvalidIdentifier;
@@ -47,7 +53,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
         try metadata.put("genre", id3v1_genre_names[genre]);
     }
 
-    return metadata;
+    return metadata_container;
 }
 
 /// Returns the portion of the slice before the first NUL character.
