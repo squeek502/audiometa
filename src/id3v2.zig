@@ -194,8 +194,6 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
                 const encoding_byte = try unsynch_capable_reader.readByte();
                 text_data_size -= 1;
 
-                std.debug.print("{}\n", .{encoding_byte});
-
                 if (text_data_size == 0) continue;
 
                 const id = frame_header.idSlice(id3_header.major_version);
@@ -265,6 +263,17 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
 
                         var utf16_text = @alignCast(u16_align, std.mem.bytesAsSlice(u16, text_data));
 
+                        // if this is big endian, then swap everything to little endian up front
+                        // TODO: I feel like this probably won't handle big endian native architectures correctly
+                        if (has_bom) {
+                            const bom = utf16_text[0];
+                            if (bom == 0xFFFE) {
+                                for (utf16_text) |c, i| {
+                                    utf16_text[i] = @byteSwap(u16, c);
+                                }
+                            }
+                        }
+
                         var it = SplitIterator(u16){
                             .buffer = utf16_text,
                             .index = 0,
@@ -274,7 +283,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
                         var text = it.next().?;
                         if (has_bom) {
                             // check for byte order mark and skip it
-                            assert(text[0] == 0xFEFF or text[0] == 0xFFFE);
+                            assert(text[0] == 0xFEFF);
                             text = text[1..];
                         }
                         var utf8_text = try std.unicode.utf16leToUtf8Alloc(allocator, text);
@@ -284,7 +293,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
                             var value = it.next().?;
                             if (has_bom) {
                                 // check for byte order mark and skip it
-                                assert(value[0] == 0xFEFF or value[0] == 0xFFFE);
+                                assert(value[0] == 0xFEFF);
                                 value = value[1..];
                             }
                             var utf8_value = try std.unicode.utf16leToUtf8Alloc(allocator, value);
