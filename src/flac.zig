@@ -75,7 +75,19 @@ fn embedReadAndDump(comptime path: []const u8) !void {
     var metadata = try read(std.testing.allocator, stream.reader(), stream.seekableStream());
     defer metadata.deinit();
 
-    metadata.dump();
+    metadata.metadata.dump();
+
+    var all_meta = @import("metadata.zig").AllMetadata{
+        .allocator = std.testing.allocator,
+        .flac_metadata = metadata,
+        .id3v1_metadata = null,
+        .id3v2_metadata = null,
+    };
+    var coalesced = try @import("ffmpeg_compat.zig").coalesceMetadata(std.testing.allocator, &all_meta);
+    defer coalesced.deinit();
+
+    std.debug.print("\ncoalesced:\n", .{});
+    coalesced.dump();
 }
 
 test "read flac" {
@@ -84,4 +96,8 @@ test "read flac" {
 
 test "acursed" {
     try embedReadAndDump("01-Intro.flac");
+}
+
+test "duplicate date" {
+    try embedReadAndDump("01 The Echoes Waned.flac");
 }

@@ -9,7 +9,7 @@ const unsynch = @import("unsynch.zig");
 const ffmpeg_compat = @import("ffmpeg_compat.zig");
 const Allocator = std.mem.Allocator;
 
-const start_testing_at_prefix = "Conflict - 1985";
+const start_testing_at_prefix = "death before dishonor";
 
 test "music folder" {
     const allocator = std.testing.allocator;
@@ -68,6 +68,8 @@ const ignored_fields = std.ComptimeStringMap(void, .{
     .{"Track"}, // weird Track:Comment field name that explodes things
     .{"ID3v1 Comment"}, // this came from a COMM frame
     .{"MusicMatch_TrackArtist"}, // this came from a COMM frame
+    .{"CDDB Disc ID"}, // this came from a COMM frame
+    .{"ID3v1"}, // this came from a COMM frame
 });
 
 fn compareMetadata(allocator: *Allocator, expected: *MetadataArray, actual: *MetadataMap) !void {
@@ -79,31 +81,24 @@ fn compareMetadata(allocator: *Allocator, expected: *MetadataArray, actual: *Met
 
         if (actual.contains(field.name)) {
             var num_values = actual.valueCount(field.name).?;
-            var value_needs_free = false;
-            var actual_value: []const u8 = blk: {
-                if (num_values == 1) {
-                    break :blk actual.getFirst(field.name).?;
-                } else {
-                    // hacky, but ffmpeg will not join with ; if all values are empty
-                    // so handle that case here
-                    var all_values = (try actual.getAllAlloc(allocator, field.name)).?;
-                    defer allocator.free(all_values);
-                    var all_empty = all_empty: {
-                        for (all_values) |value| {
-                            if (value.len != 0) break :all_empty false;
-                        }
-                        break :all_empty true;
-                    };
-                    if (all_empty) {
-                        break :blk "";
-                    } else {
-                        var joined_value = (try actual.getJoinedAlloc(allocator, field.name, ";")).?;
-                        value_needs_free = true;
-                        break :blk joined_value;
+            // ffmpeg_compat should coalesce all duplicates, since ffmpeg hates duplicates
+            std.testing.expectEqual(num_values, 1) catch |e| {
+                std.debug.print("\nexpected:\n", .{});
+                for (expected.array.items) |_field| {
+                    if (std.mem.eql(u8, _field.name, field.name)) {
+                        std.debug.print("{s} = {s}\n", .{ fmtUtf8SliceEscapeUpper(_field.name), fmtUtf8SliceEscapeUpper(_field.value) });
                     }
                 }
+                std.debug.print("\nactual:\n", .{});
+                var values = (try actual.getAllAlloc(allocator, field.name)).?;
+                defer allocator.free(values);
+
+                for (values) |val| {
+                    std.debug.print("{s} = {s}\n", .{ fmtUtf8SliceEscapeUpper(field.name), fmtUtf8SliceEscapeUpper(val) });
+                }
+                return e;
             };
-            defer if (value_needs_free) allocator.free(actual_value);
+            var actual_value = actual.getFirst(field.name).?;
 
             std.testing.expectEqualStrings(field.value, actual_value) catch |e| {
                 std.debug.print("\nexpected:\n", .{});
@@ -208,7 +203,7 @@ fn getFFProbeMetadata(allocator: *std.mem.Allocator, cwd: ?std.fs.Dir, filepath:
 
 test "ffprobe compare" {
     const allocator = std.testing.allocator;
-    const filepath = "/media/drive4/music/Catharsis - 1997- Samsara [v0]/01 - i. One Minute Closer the the Hour of Your Death.mp3";
+    const filepath = "/media/drive4/music/Descolada - Descolada (2006) - V3/01 - You Talk Perty.mp3";
     var probed_metadata = getFFProbeMetadata(allocator, null, filepath) catch |e| switch (e) {
         error.NoMetadataFound => MetadataArray.init(allocator),
         else => return e,

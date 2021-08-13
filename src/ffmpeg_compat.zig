@@ -9,23 +9,28 @@ pub fn coalesceMetadata(allocator: *Allocator, metadata: *AllMetadata) !Metadata
     errdefer coalesced.deinit();
 
     if (metadata.flac_metadata) |*flac_metadata| {
-        for (flac_metadata.metadata.entries.items) |entry| {
+        // since flac allows for duplicate fields, ffmpeg concats them with ;
+        // because ffmpeg has a 'no duplicate fields' rule
+        var names_it = flac_metadata.metadata.name_to_indexes.keyIterator();
+        while (names_it.next()) |raw_name| {
             // vorbis metadata fields are case-insensitive, so convert to uppercase
             // for the lookup
-            var upper_field = try std.ascii.allocUpperString(allocator, entry.name);
+            var upper_field = try std.ascii.allocUpperString(allocator, raw_name.*);
             defer allocator.free(upper_field);
 
-            const name = flac_field_names.get(upper_field) orelse entry.name;
-            try coalesced.put(name, entry.value);
+            const name = flac_field_names.get(upper_field) orelse raw_name.*;
+            var joined_value = (try flac_metadata.metadata.getJoinedAlloc(allocator, raw_name.*, ";")).?;
+            defer allocator.free(joined_value);
+
+            try coalesced.put(name, joined_value);
         }
     } else {
         if (metadata.id3v2_metadata) |id3v2_metadata_list| {
-            for (id3v2_metadata_list) |*id3v2_metadata_container, i| {
+            for (id3v2_metadata_list) |*id3v2_metadata_container| {
                 const id3v2_metadata = &id3v2_metadata_container.data.metadata;
-                const is_duplicate_tag = i != 0;
                 for (id3v2_metadata.entries.items) |entry| {
                     const name = convert_id_to_name(entry.name, id3v2_metadata_container.major_version) orelse entry.name;
-                    if (!is_duplicate_tag or !coalesced.contains(name)) {
+                    if (!coalesced.contains(name)) {
                         try coalesced.put(name, entry.value);
                     }
                 }
