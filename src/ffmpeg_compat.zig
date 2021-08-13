@@ -3,6 +3,7 @@ const meta = @import("metadata.zig");
 const AllMetadata = meta.AllMetadata;
 const MetadataMap = meta.MetadataMap;
 const Allocator = std.mem.Allocator;
+const nulTerminated = @import("util.zig").nulTerminated;
 
 pub fn coalesceMetadata(allocator: *Allocator, metadata: *AllMetadata) !MetadataMap {
     var coalesced = meta.MetadataMap.init(allocator);
@@ -140,10 +141,8 @@ const id3v2_2_name_lookup = std.ComptimeStringMap([]const u8, .{
     .{ "TRK", "track" },
 });
 
-fn convert_id_to_name(id: []const u8, major_version: u8) ?[]const u8 {
-    switch (major_version) {
-        0...2 => return id3v2_2_name_lookup.get(id),
-        //3 => return id3v2_34_name_lookup.get(id),
-        else => return id3v2_4_name_lookup.get(id) orelse id3v2_34_name_lookup.get(id),
-    }
+fn convert_id_to_name(id: []const u8) ?[]const u8 {
+    // this is the order of precedence that ffmpeg does this
+    // it also does not care about the major version, it just converts things unconditionally
+    return id3v2_34_name_lookup.get(id) orelse id3v2_2_name_lookup.get(nulTerminated(id)) orelse id3v2_4_name_lookup.get(id);
 }

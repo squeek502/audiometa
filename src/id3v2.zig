@@ -89,9 +89,18 @@ pub const FrameHeader = struct {
         //const invalid_length_min: usize = if (self.has_data_length_indicator()) 4 else 0;
         //if (self.size <= invalid_length_min) return error.FrameTooShort;
         if (self.size > max_size) return error.FrameTooLong;
-        for (self.idSlice(major_version)) |c| switch (c) {
+        for (self.idSlice(major_version)) |c, i| switch (c) {
             'A'...'Z', '0'...'9' => {},
-            else => return error.InvalidFrameID,
+            else => {
+                // This is a hack to allow for v2.2 (3 char) ids to be read in v2.3 tags
+                // which are apparently from an iTunes encoding bug.
+                // TODO: document that frame ids might be nul teriminated in this case
+                // or come up with a less hacky solution
+                const is_id3v2_2_id_in_v2_3_frame = major_version == 3 and i == 3 and c == '\x00';
+                if (!is_id3v2_2_id_in_v2_3_frame) {
+                    return error.InvalidFrameID;
+                }
+            },
         };
     }
 

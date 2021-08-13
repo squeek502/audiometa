@@ -4,6 +4,7 @@ const Allocator = std.mem.Allocator;
 const synchsafe = @import("synchsafe.zig");
 const latin1 = @import("latin1.zig");
 const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
+const nulTerminated = @import("util.zig").nulTerminated;
 const unsynch = @import("unsynch.zig");
 const Metadata = @import("metadata.zig").Metadata;
 
@@ -54,16 +55,6 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
     }
 
     return metadata_container;
-}
-
-/// Returns the portion of the slice before the first NUL character.
-/// There's probably something to do this in the std lib but I can't find it
-fn nulTerminated(x: []const u8) []const u8 {
-    if (std.mem.indexOfScalar(u8, x, '\x00')) |nul_index| {
-        return x[0..nul_index];
-    } else {
-        return x;
-    }
 }
 
 fn embedReadAndDump(comptime path: []const u8) !void {
