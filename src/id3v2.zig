@@ -262,12 +262,8 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
 
                         if (text_data.len % 2 != 0) {
                             // there could be an erroneous trailing single char nul-terminator
-                            // if so, just ignore it
-                            if (text_data[text_data.len - 1] == '\x00') {
-                                text_data = text_data[0..(text_data.len - 1)];
-                            } else {
-                                break;
-                            }
+                            // or garbage. if so, just ignore it and pretend it doesn't exist
+                            text_data = text_data[0..(text_data.len - 1)];
                         }
 
                         var utf16_text = @alignCast(u16_align, std.mem.bytesAsSlice(u16, text_data));
