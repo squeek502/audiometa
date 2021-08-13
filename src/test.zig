@@ -9,7 +9,7 @@ const unsynch = @import("unsynch.zig");
 const ffmpeg_compat = @import("ffmpeg_compat.zig");
 const Allocator = std.mem.Allocator;
 
-const start_testing_at_prefix = "Dystopia - Dystopia (2008)";
+const start_testing_at_prefix = "have_heart-demo_2003";
 
 test "music folder" {
     const allocator = std.testing.allocator;
@@ -77,6 +77,8 @@ const ignored_fields = std.ComptimeStringMap(void, .{
     .{"ID3v1"}, // this came from a COMM frame
     .{"c0"}, // this came from a COMM frame
     .{"Media Jukebox"}, // this came from a COMM frame
+    .{"l assault cover"}, // this came from a weird COMM frame
+    .{"http"}, // this came from a weird COMM frame
 });
 
 fn compareMetadata(allocator: *Allocator, expected: *MetadataArray, actual: *MetadataMap) !void {
@@ -210,7 +212,7 @@ fn getFFProbeMetadata(allocator: *std.mem.Allocator, cwd: ?std.fs.Dir, filepath:
 
 test "ffprobe compare" {
     const allocator = std.testing.allocator;
-    const filepath = "/media/drive4/music/Dystopia - Dystopia (2008) - V0 [CD]/01-dystopia-now_and_forever.mp3";
+    const filepath = "/media/drive4/music/Il Male - Ritorno (2012)/Il Male - 01 - Preludio.mp3";
     var probed_metadata = getFFProbeMetadata(allocator, null, filepath) catch |e| switch (e) {
         error.NoMetadataFound => MetadataArray.init(allocator),
         else => return e,

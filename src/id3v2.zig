@@ -387,10 +387,30 @@ pub fn SplitIterator(comptime T: type) type {
 fn embedReadAndDump(comptime path: []const u8) !void {
     const data = @embedFile(path);
     var stream = std.io.fixedBufferStream(data);
-    var metadata = try read(std.testing.allocator, stream.reader(), stream.seekableStream());
-    defer metadata.deinit();
+    var metadata_slice = try read(std.testing.allocator, stream.reader(), stream.seekableStream());
+    defer {
+        for (metadata_slice) |*id3v2_metadata| {
+            id3v2_metadata.deinit();
+        }
+        std.testing.allocator.free(metadata_slice);
+    }
 
-    metadata.dump();
+    for (metadata_slice) |*id3v2_metadata| {
+        std.debug.print("\nID3v2 major_version: {}\n", .{id3v2_metadata.major_version});
+        id3v2_metadata.data.metadata.dump();
+    }
+
+    var all_meta = @import("metadata.zig").AllMetadata{
+        .allocator = std.testing.allocator,
+        .flac_metadata = null,
+        .id3v1_metadata = null,
+        .id3v2_metadata = metadata_slice,
+    };
+    var coalesced = try @import("ffmpeg_compat.zig").coalesceMetadata(std.testing.allocator, &all_meta);
+    defer coalesced.deinit();
+
+    std.debug.print("\ncoalesced:\n", .{});
+    coalesced.dump();
 }
 
 test "mp3 read" {
