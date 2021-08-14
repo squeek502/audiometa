@@ -9,7 +9,23 @@ const unsynch = @import("unsynch.zig");
 const ffmpeg_compat = @import("ffmpeg_compat.zig");
 const Allocator = std.mem.Allocator;
 
-const start_testing_at_prefix = "have_heart-demo_2003";
+const start_testing_at_prefix = "";
+
+// ffmpeg fails to parse unsynchronised tags correctly
+// in these files, its a MCDI frame followed by a TLEN frame
+// ffmpeg reads len bytes directly instead of unsynching and then reading len bytes
+// so it falls (num unsynched bytes in the frame) short when reading the next frame
+// this is the relevant bug but it was closed as invalid (incorrectly, AFAICT):
+// https://trac.ffmpeg.org/ticket/4
+const ffmpeg_unsync_bugged_files = std.ComptimeStringMap(void, .{
+    .{"Doomed Future Today/14 - Bombs (Version).mp3"},
+    .{"Living Through The End Time/13 - Imaginary Friend.mp3"},
+});
+
+const ffprobe_unusable_output_files = std.ComptimeStringMap(void, .{
+    // TODO: possible outputting issue, ? in ffprobe output
+    .{"Simbiose - 2009 - Fake Dimension/13-simbiose-evolucao_e_regressao.mp3"},
+});
 
 test "music folder" {
     const allocator = std.testing.allocator;
@@ -28,20 +44,12 @@ test "music folder" {
         }
         if (entry.kind != .File) continue;
 
-        // TODO: need to look into further, don't understand what's happening
-        if (std.mem.eql(u8, entry.path, "Doomed Future Today/14 - Bombs (Version).mp3")) {
-            continue;
-        }
-        // TODO: possible outputting issue, ? in ffprobe output
-        if (std.mem.eql(u8, entry.path, "Simbiose - 2009 - Fake Dimension/13-simbiose-evolucao_e_regressao.mp3")) {
-            continue;
-        }
+        if (ffmpeg_unsync_bugged_files.has(entry.path)) continue;
+        if (ffprobe_unusable_output_files.has(entry.path)) continue;
         // TODO: fairly unsolvable, these use a TXXX field with "album  " as the name, which is impossible
         // to distinguish from "album" when parsing the ffprobe output. Maybe using ffmpeg -f ffmetadata
         // might be better?
-        if (std.mem.startsWith(u8, entry.path, "Sonic Cathedrals Vol. XLVI Curated by Age of Collapse/")) {
-            continue;
-        }
+        if (std.mem.startsWith(u8, entry.path, "Sonic Cathedrals Vol. XLVI Curated by Age of Collapse/")) continue;
 
         const extension = std.fs.path.extension(entry.basename);
         const is_mp3 = std.mem.eql(u8, extension, ".mp3");
