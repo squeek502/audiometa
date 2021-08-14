@@ -479,6 +479,6 @@ test "flac with full unsynch id3" {
     try embedReadAndDump("01 - Intro.flac");
 }
 
-test "id3v1" {
-    try embedReadAndDump("(01) ... to reduce the choir to one soloist - Blind.mp3");
+test "dup test" {
+    try embedReadAndDump("04-icepick-violent_epiphany.mp3");
 }

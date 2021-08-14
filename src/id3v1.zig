@@ -84,7 +84,7 @@ fn embedReadAndDump(comptime path: []const u8) !void {
     var metadata = try read(std.testing.allocator, stream.reader(), stream.seekableStream());
     defer metadata.deinit();
 
-    metadata.dump();
+    metadata.metadata.dump();
 }
 
 test "mp3" {
@@ -100,7 +100,7 @@ test "empty" {
     var metadata = try read(std.testing.allocator, stream.reader(), stream.seekableStream());
     defer metadata.deinit();
 
-    metadata.dump();
+    metadata.metadata.dump();
 }
 
 pub const id3v1_genre_names = [_][]const u8{

@@ -22,7 +22,11 @@ pub fn build(b: *std.build.Builder) void {
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
-
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
+
+    var tests = b.addTest("src/audiometa.zig");
+    tests.setBuildMode(mode);
+    const test_step = b.step("test", "Run all tests");
+    test_step.dependOn(&tests.step);
 }
