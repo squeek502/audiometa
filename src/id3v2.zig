@@ -6,6 +6,7 @@ const latin1 = @import("latin1.zig");
 const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
 const unsynch = @import("unsynch.zig");
 const ID3v2Metadata = @import("metadata.zig").ID3v2Metadata;
+const nulTerminated = @import("util.zig").nulTerminated;
 
 pub const id3v2_identifier = "ID3";
 
@@ -39,6 +40,7 @@ pub const ID3Header = struct {
 pub const FrameHeader = struct {
     id: [4]u8,
     size: u32,
+    raw_size: u32,
     status_flags: u8,
     format_flags: u8,
 
@@ -57,19 +59,19 @@ pub const FrameHeader = struct {
                 return FrameHeader{
                     .id = [_]u8{ header[0], header[1], header[2], '\x00' },
                     .size = size,
+                    .raw_size = size,
                     .status_flags = 0,
                     .format_flags = 0,
                 };
             },
             else => {
                 const header = try reader.readBytesNoEof(10);
-                var size = std.mem.readIntSliceBig(u32, header[4..8]);
-                if (major_version >= 4) {
-                    size = synchsafe.decode(u32, size);
-                }
+                const raw_size = std.mem.readIntSliceBig(u32, header[4..8]);
+                const size = if (major_version >= 4) synchsafe.decode(u32, raw_size) else raw_size;
                 return FrameHeader{
                     .id = [_]u8{ header[0], header[1], header[2], header[3] },
                     .size = size,
+                    .raw_size = raw_size,
                     .status_flags = header[8],
                     .format_flags = header[9],
                 };
@@ -173,7 +175,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
         const tag_end_with_enough_space_for_valid_frame: usize = metadata_container.end_offset - frame_header_len;
         std.debug.print("{} < {}\n", .{ (try seekable_stream.getPos()), tag_end_with_enough_space_for_valid_frame });
         while ((try seekable_stream.getPos()) < tag_end_with_enough_space_for_valid_frame) {
-            const frame_header = try FrameHeader.read(unsynch_capable_reader, id3_header.major_version);
+            var frame_header = try FrameHeader.read(unsynch_capable_reader, id3_header.major_version);
             std.debug.print("{} {s}\n", .{ frame_header, std.fmt.fmtSliceEscapeUpper(frame_header.idSlice(id3_header.major_version)) });
 
             // validate frame_header and bail out if its too crazy
@@ -187,6 +189,32 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
             // it without failing the parse, so just skip it
             // TODO: zero sized T-type frames? would ffprobe output that?
             if (frame_header.size == 0) continue;
+
+            // sometimes v2.4 encoders don't use synchsafe integers for their frame sizes
+            // so we need to double check
+            if (id3_header.major_version >= 4) {
+                const cur_pos = try seekable_stream.getPos();
+                synchsafe_check: {
+                    const after_frame_u32 = cur_pos + frame_header.raw_size;
+                    const after_frame_synchsafe = cur_pos + frame_header.size;
+
+                    seekable_stream.seekTo(after_frame_synchsafe) catch break :synchsafe_check;
+                    const next_frame_header_synchsafe = FrameHeader.read(unsynch_capable_reader, id3_header.major_version) catch break :synchsafe_check;
+
+                    if (next_frame_header_synchsafe.validate(id3_header.major_version, id3_header.size)) {
+                        break :synchsafe_check;
+                    } else |_| {}
+
+                    seekable_stream.seekTo(after_frame_u32) catch break :synchsafe_check;
+                    const next_frame_header_u32 = FrameHeader.read(unsynch_capable_reader, id3_header.major_version) catch break :synchsafe_check;
+
+                    next_frame_header_u32.validate(id3_header.major_version, id3_header.size) catch break :synchsafe_check;
+
+                    // if we got here then this is the better size
+                    frame_header.size = frame_header.raw_size;
+                }
+                try seekable_stream.seekTo(cur_pos);
+            }
 
             // has a text encoding byte at the start
             if (frame_header.id[0] == 'T') {
@@ -205,9 +233,11 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
 
                 if (text_data_size == 0) continue;
 
-                const id = frame_header.idSlice(id3_header.major_version);
-                const user_defined_id = switch (id3_header.major_version) {
-                    0...2 => "TXX",
+                // Treat as NUL terminated because some v2.3 tags will use 3 length IDs
+                // with a NUL as the 4th char, and we should handle those as NUL terminated
+                const id = nulTerminated(frame_header.idSlice(id3_header.major_version));
+                const user_defined_id = switch (id.len) {
+                    3 => "TXX",
                     else => "TXXX",
                 };
                 const is_user_defined = std.mem.eql(u8, id, user_defined_id);

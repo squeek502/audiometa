@@ -25,27 +25,45 @@ pub fn coalesceMetadata(allocator: *Allocator, metadata: *AllMetadata) !Metadata
 
             try coalesced.put(name, joined_value);
         }
-    } else {
+    }
+
+    if (coalesced.entries.items.len == 0) {
         if (metadata.id3v2_metadata) |id3v2_metadata_list| {
+            // Here's an overview of how ffmpeg does things:
+            // 1. add all fields with their unconverted ID without overwriting
+            //    (this means that all duplicate fields are ignored)
+            // 2. once all tags are finished reading, convert IDs to their 'ffmpeg name',
+            //    allowing overwrites
+            // also it seems like empty values are exempt from overwriting things
+            // even if they would otherwise? I'm not sure where this is coming from, but
+            // it seems like that's the case from the output of ffprobe
+            //
+            // So, we need to basically do the same thing here using a temporary
+            // MetadataMap
+
+            var metadata_tmp = meta.MetadataMap.init(allocator);
+            defer metadata_tmp.deinit();
+
             for (id3v2_metadata_list) |*id3v2_metadata_container| {
                 const id3v2_metadata = &id3v2_metadata_container.data.metadata;
+
                 for (id3v2_metadata.entries.items) |entry| {
-                    const converted_name = convert_id_to_name(entry.name);
-                    const name = converted_name orelse entry.name;
-                    // a bit weird, but since ffmpeg only converts at the end, we need to
-                    // emulate that by checking if the conversion would replace something
-                    // that exists in the tag already
-                    const would_converted_name_replace_something = blk: {
-                        if (converted_name == null) break :blk false;
-                        break :blk id3v2_metadata.contains(converted_name.?);
-                    };
-                    if (!would_converted_name_replace_something and !coalesced.contains(name)) {
-                        try coalesced.put(name, entry.value);
-                    }
+                    if (metadata_tmp.contains(entry.name)) continue;
+                    try metadata_tmp.put(entry.name, entry.value);
                 }
             }
+
+            for (metadata_tmp.entries.items) |entry| {
+                const converted_name = convert_id_to_name(entry.name);
+                const name = converted_name orelse entry.name;
+                try coalesced.putOrReplaceFirst(name, entry.value);
+            }
             try mergeDate(&coalesced);
-        } else if (metadata.id3v1_metadata) |*id3v1_metadata| {
+        }
+    }
+
+    if (coalesced.entries.items.len == 0) {
+        if (metadata.id3v1_metadata) |*id3v1_metadata| {
             // just a clone
             for (id3v1_metadata.metadata.entries.items) |entry| {
                 try coalesced.put(entry.name, entry.value);

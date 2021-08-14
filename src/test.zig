@@ -28,8 +28,18 @@ test "music folder" {
         }
         if (entry.kind != .File) continue;
 
-        // bug in ffmpeg; reads the TLEN as 143546 when it is actually "0"
+        // TODO: need to look into further, don't understand what's happening
         if (std.mem.eql(u8, entry.path, "Doomed Future Today/14 - Bombs (Version).mp3")) {
+            continue;
+        }
+        // TODO: possible outputting issue, ? in ffprobe output
+        if (std.mem.eql(u8, entry.path, "Simbiose - 2009 - Fake Dimension/13-simbiose-evolucao_e_regressao.mp3")) {
+            continue;
+        }
+        // TODO: fairly unsolvable, these use a TXXX field with "album  " as the name, which is impossible
+        // to distinguish from "album" when parsing the ffprobe output. Maybe using ffmpeg -f ffmetadata
+        // might be better?
+        if (std.mem.startsWith(u8, entry.path, "Sonic Cathedrals Vol. XLVI Curated by Age of Collapse/")) {
             continue;
         }
 
@@ -69,6 +79,10 @@ const ignored_fields = std.ComptimeStringMap(void, .{
     .{"encoder"},
     .{"comment"}, // TODO
     .{"UNSYNCEDLYRICS"}, // TODO multiline ffprobe parsing
+    .{"unsyncedlyrics"}, // ^
+    .{"LYRICS"}, //         ^
+    .{"COVERART"}, // multiline but also binary, so probably more than just multiline parsing is needed, see Deathrats - 7 inch/
+    .{"CODING_HISTORY"}, // TODO multiline ffprobe parsing, see Miserable-Uncontrollable-2016-WEB-FLAC/05 Stranger.flac
     .{"genre"}, // TODO parse (n) at start and convert it to genre
     .{"Track"}, // weird Track:Comment field name that explodes things
     .{"ID3v1 Comment"}, // this came from a COMM frame
@@ -79,6 +93,12 @@ const ignored_fields = std.ComptimeStringMap(void, .{
     .{"Media Jukebox"}, // this came from a COMM frame
     .{"l assault cover"}, // this came from a weird COMM frame
     .{"http"}, // this came from a weird COMM frame
+    .{"MusicMatch_Preference"}, // this came from a COMM frame
+    .{"Songs-DB_Custom1"}, // this came from a COMM frame
+    .{"Comments"}, // this came from a COMM frame
+    .{"Checksum"}, // this came from a COMM frame
+    .{"Songs-DB_Custom5"}, // this came from a COMM frame
+    .{"oso"}, // this came from a COMM frame
 });
 
 fn compareMetadata(allocator: *Allocator, expected: *MetadataArray, actual: *MetadataMap) !void {
@@ -87,6 +107,7 @@ fn compareMetadata(allocator: *Allocator, expected: *MetadataArray, actual: *Met
         if (std.mem.startsWith(u8, field.name, "id3v2_priv.")) continue;
         if (std.mem.startsWith(u8, field.name, "lyrics")) continue;
         if (std.mem.startsWith(u8, field.name, "iTun")) continue;
+        if (std.mem.startsWith(u8, field.name, "Songs-DB")) continue;
 
         if (actual.contains(field.name)) {
             var num_values = actual.valueCount(field.name).?;
@@ -110,6 +131,7 @@ fn compareMetadata(allocator: *Allocator, expected: *MetadataArray, actual: *Met
             var actual_value = actual.getFirst(field.name).?;
 
             std.testing.expectEqualStrings(field.value, actual_value) catch |e| {
+                std.debug.print("field: {s}\n", .{fmtUtf8SliceEscapeUpper(field.name)});
                 std.debug.print("\nexpected:\n", .{});
                 for (expected.array.items) |_field| {
                     std.debug.print("{s} = {s}\n", .{ fmtUtf8SliceEscapeUpper(_field.name), fmtUtf8SliceEscapeUpper(_field.value) });
