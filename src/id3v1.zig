@@ -7,6 +7,7 @@ const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
 const nulTerminated = @import("util.zig").nulTerminated;
 const unsynch = @import("unsynch.zig");
 const Metadata = @import("metadata.zig").Metadata;
+const latin1ToUtf8Alloc = @import("latin1.zig").latin1ToUtf8Alloc;
 
 pub const id3v1_identifier = "TAG";
 
@@ -40,11 +41,31 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
     const track_num = data[126];
     const genre = data[127];
 
-    if (song_name.len > 0) try metadata.put("title", song_name);
-    if (artist.len > 0) try metadata.put("artist", artist);
-    if (album_name.len > 0) try metadata.put("album", album_name);
-    if (year.len > 0) try metadata.put("date", year);
-    if (comment.len > 0) try metadata.put("comment", comment);
+    if (song_name.len > 0) {
+        var utf8_song_name = try latin1ToUtf8Alloc(allocator, song_name);
+        defer allocator.free(utf8_song_name);
+        try metadata.put("title", utf8_song_name);
+    }
+    if (artist.len > 0) {
+        var utf8_artist = try latin1ToUtf8Alloc(allocator, artist);
+        defer allocator.free(utf8_artist);
+        try metadata.put("artist", utf8_artist);
+    }
+    if (album_name.len > 0) {
+        var utf8_album_name = try latin1ToUtf8Alloc(allocator, album_name);
+        defer allocator.free(utf8_album_name);
+        try metadata.put("album", utf8_album_name);
+    }
+    if (year.len > 0) {
+        var utf8_year = try latin1ToUtf8Alloc(allocator, year);
+        defer allocator.free(utf8_year);
+        try metadata.put("date", utf8_year);
+    }
+    if (comment.len > 0) {
+        var utf8_comment = try latin1ToUtf8Alloc(allocator, comment);
+        defer allocator.free(utf8_comment);
+        try metadata.put("comment", utf8_comment);
+    }
     if (could_be_v1_1 and track_num > 0) {
         var buf: [3]u8 = undefined;
         const track_num_string = try std.fmt.bufPrint(buf[0..], "{}", .{track_num});
