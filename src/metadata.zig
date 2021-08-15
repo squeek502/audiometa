@@ -9,7 +9,7 @@ pub fn readAll(allocator: *Allocator, stream_source: *std.io.StreamSource) !AllM
     var reader = stream_source.reader();
     var seekable_stream = stream_source.seekableStream();
 
-    var id3v2_metadata: ?[]ID3v2Metadata = id3v2.read(allocator, reader, seekable_stream) catch |e| switch (e) {
+    var all_id3v2_metadata: ?[]ID3v2Metadata = id3v2.read(allocator, reader, seekable_stream) catch |e| switch (e) {
         error.OutOfMemory => |err| return err,
         else => null,
     };
@@ -19,9 +19,9 @@ pub fn readAll(allocator: *Allocator, stream_source: *std.io.StreamSource) !AllM
     };
     // TODO: this isnt correct for id3v2 tags at the end of a file or when a SEEK frame is used
     var pos_after_last_id3v2: usize = blk: {
-        if (id3v2_metadata) |meta_slice| {
+        if (all_id3v2_metadata) |meta_slice| {
             if (meta_slice.len > 0) {
-                var last_offset = meta_slice[meta_slice.len - 1].data.end_offset;
+                var last_offset = meta_slice[meta_slice.len - 1].metadata.end_offset;
                 break :blk last_offset;
             }
         }
@@ -35,53 +35,53 @@ pub fn readAll(allocator: *Allocator, stream_source: *std.io.StreamSource) !AllM
 
     return AllMetadata{
         .allocator = allocator,
-        .id3v2_metadata = id3v2_metadata,
-        .id3v1_metadata = id3v1_metadata,
-        .flac_metadata = flac_metadata,
+        .all_id3v2 = all_id3v2_metadata,
+        .id3v1 = id3v1_metadata,
+        .flac = flac_metadata,
     };
 }
 
 pub const AllMetadata = struct {
     allocator: *Allocator,
-    id3v2_metadata: ?[]ID3v2Metadata,
-    id3v1_metadata: ?Metadata,
+    all_id3v2: ?[]ID3v2Metadata,
+    id3v1: ?Metadata,
     // TODO rename? xiph? vorbis?
-    flac_metadata: ?Metadata,
+    flac: ?Metadata,
 
     pub fn deinit(self: *AllMetadata) void {
-        if (self.id3v2_metadata) |id3v2_metadata| {
-            for (id3v2_metadata) |*metadata| {
+        if (self.all_id3v2) |all_id3v2| {
+            for (all_id3v2) |*metadata| {
                 metadata.deinit();
             }
-            self.allocator.free(id3v2_metadata);
+            self.allocator.free(all_id3v2);
         }
-        if (self.id3v1_metadata) |*id3v1_metadata| {
+        if (self.id3v1) |*id3v1_metadata| {
             id3v1_metadata.deinit();
         }
-        if (self.flac_metadata) |*flac_metadata| {
+        if (self.flac) |*flac_metadata| {
             flac_metadata.deinit();
         }
     }
 };
 
 pub const ID3v2Metadata = struct {
-    data: Metadata,
+    metadata: Metadata,
     major_version: u8,
 
     pub fn init(allocator: *Allocator, major_version: u8, start_offset: usize) ID3v2Metadata {
         return .{
-            .data = Metadata.initWithStartOffset(allocator, start_offset),
+            .metadata = Metadata.initWithStartOffset(allocator, start_offset),
             .major_version = major_version,
         };
     }
 
     pub fn deinit(self: *ID3v2Metadata) void {
-        self.data.deinit();
+        self.metadata.deinit();
     }
 };
 
 pub const Metadata = struct {
-    metadata: MetadataMap,
+    map: MetadataMap,
     start_offset: usize,
     end_offset: usize,
 
@@ -91,14 +91,14 @@ pub const Metadata = struct {
 
     pub fn initWithStartOffset(allocator: *Allocator, start_offset: usize) Metadata {
         return .{
-            .metadata = MetadataMap.init(allocator),
+            .map = MetadataMap.init(allocator),
             .start_offset = start_offset,
             .end_offset = undefined,
         };
     }
 
     pub fn deinit(self: *Metadata) void {
-        self.metadata.deinit();
+        self.map.deinit();
     }
 };
 

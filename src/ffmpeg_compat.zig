@@ -9,10 +9,10 @@ pub fn coalesceMetadata(allocator: *Allocator, metadata: *AllMetadata) !Metadata
     var coalesced = meta.MetadataMap.init(allocator);
     errdefer coalesced.deinit();
 
-    if (metadata.flac_metadata) |*flac_metadata| {
+    if (metadata.flac) |*flac_metadata| {
         // since flac allows for duplicate fields, ffmpeg concats them with ;
         // because ffmpeg has a 'no duplicate fields' rule
-        var names_it = flac_metadata.metadata.name_to_indexes.keyIterator();
+        var names_it = flac_metadata.map.name_to_indexes.keyIterator();
         while (names_it.next()) |raw_name| {
             // vorbis metadata fields are case-insensitive, so convert to uppercase
             // for the lookup
@@ -20,7 +20,7 @@ pub fn coalesceMetadata(allocator: *Allocator, metadata: *AllMetadata) !Metadata
             defer allocator.free(upper_field);
 
             const name = flac_field_names.get(upper_field) orelse raw_name.*;
-            var joined_value = (try flac_metadata.metadata.getJoinedAlloc(allocator, raw_name.*, ";")).?;
+            var joined_value = (try flac_metadata.map.getJoinedAlloc(allocator, raw_name.*, ";")).?;
             defer allocator.free(joined_value);
 
             try coalesced.put(name, joined_value);
@@ -28,7 +28,7 @@ pub fn coalesceMetadata(allocator: *Allocator, metadata: *AllMetadata) !Metadata
     }
 
     if (coalesced.entries.items.len == 0) {
-        if (metadata.id3v2_metadata) |id3v2_metadata_list| {
+        if (metadata.all_id3v2) |id3v2_metadata_list| {
             // Here's an overview of how ffmpeg does things:
             // 1. add all fields with their unconverted ID without overwriting
             //    (this means that all duplicate fields are ignored)
@@ -45,7 +45,7 @@ pub fn coalesceMetadata(allocator: *Allocator, metadata: *AllMetadata) !Metadata
             defer metadata_tmp.deinit();
 
             for (id3v2_metadata_list) |*id3v2_metadata_container| {
-                const id3v2_metadata = &id3v2_metadata_container.data.metadata;
+                const id3v2_metadata = &id3v2_metadata_container.metadata.map;
 
                 for (id3v2_metadata.entries.items) |entry| {
                     if (metadata_tmp.contains(entry.name)) continue;
@@ -54,7 +54,7 @@ pub fn coalesceMetadata(allocator: *Allocator, metadata: *AllMetadata) !Metadata
             }
 
             for (metadata_tmp.entries.items) |entry| {
-                const converted_name = convert_id_to_name(entry.name);
+                const converted_name = convertIdToName(entry.name);
                 const name = converted_name orelse entry.name;
                 try coalesced.putOrReplaceFirst(name, entry.value);
             }
@@ -63,9 +63,9 @@ pub fn coalesceMetadata(allocator: *Allocator, metadata: *AllMetadata) !Metadata
     }
 
     if (coalesced.entries.items.len == 0) {
-        if (metadata.id3v1_metadata) |*id3v1_metadata| {
+        if (metadata.id3v1) |*id3v1_metadata| {
             // just a clone
-            for (id3v1_metadata.metadata.entries.items) |entry| {
+            for (id3v1_metadata.map.entries.items) |entry| {
                 try coalesced.put(entry.name, entry.value);
             }
         }
@@ -167,7 +167,7 @@ const id3v2_2_name_lookup = std.ComptimeStringMap([]const u8, .{
     .{ "TRK", "track" },
 });
 
-fn convert_id_to_name(id: []const u8) ?[]const u8 {
+fn convertIdToName(id: []const u8) ?[]const u8 {
     // this is the order of precedence that ffmpeg does this
     // it also does not care about the major version, it just converts things unconditionally
     return id3v2_34_name_lookup.get(id) orelse id3v2_2_name_lookup.get(nulTerminated(id)) orelse id3v2_4_name_lookup.get(id);

@@ -9,10 +9,10 @@ const flac_stream_marker = "fLaC";
 const block_type_vorbis_comment = 4;
 
 pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !Metadata {
-    var metadata_container: Metadata = Metadata.init(allocator);
-    errdefer metadata_container.deinit();
+    var metadata: Metadata = Metadata.init(allocator);
+    errdefer metadata.deinit();
 
-    var metadata = &metadata_container.metadata;
+    var metadata_map = &metadata.map;
 
     var stream_marker = try reader.readBytesNoEof(4);
 
@@ -55,7 +55,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
                 var field = split_it.next().?;
                 var value = split_it.rest();
 
-                try metadata.put(field, value);
+                try metadata_map.put(field, value);
 
                 user_comment_offset += 4 + comment_length;
             }
@@ -66,7 +66,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
         if (is_last_metadata_block) break;
     }
 
-    return metadata_container;
+    return metadata;
 }
 
 fn embedReadAndDump(comptime path: []const u8) !void {
@@ -75,13 +75,13 @@ fn embedReadAndDump(comptime path: []const u8) !void {
     var metadata = try read(std.testing.allocator, stream.reader(), stream.seekableStream());
     defer metadata.deinit();
 
-    metadata.metadata.dump();
+    metadata.map.dump();
 
     var all_meta = @import("metadata.zig").AllMetadata{
         .allocator = std.testing.allocator,
-        .flac_metadata = metadata,
-        .id3v1_metadata = null,
-        .id3v2_metadata = null,
+        .flac = metadata,
+        .id3v1 = null,
+        .all_id3v2 = null,
     };
     var coalesced = try @import("ffmpeg_compat.zig").coalesceMetadata(std.testing.allocator, &all_meta);
     defer coalesced.deinit();

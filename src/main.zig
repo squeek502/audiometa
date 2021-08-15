@@ -17,19 +17,19 @@ pub fn main() anyerror!void {
         var metadata = try audiometa.metadata.readAll(allocator, &stream_source);
         defer metadata.deinit();
 
-        if (metadata.id3v2_metadata) |id3v2_metadata_list| {
+        if (metadata.all_id3v2) |id3v2_metadata_list| {
             for (id3v2_metadata_list) |*id3v2_metadata, i| {
                 std.debug.print("\nID3v2 Tag #{}\n============\n", .{i + 1});
-                id3v2_metadata.data.metadata.dump();
+                id3v2_metadata.metadata.map.dump();
             }
         }
-        if (metadata.flac_metadata) |*flac_metadata| {
+        if (metadata.flac) |*flac_metadata| {
             std.debug.print("\nFLAC Metadata\n============\n", .{});
-            flac_metadata.metadata.dump();
+            flac_metadata.map.dump();
         }
-        if (metadata.id3v1_metadata) |*id3v1_metadata| {
+        if (metadata.id3v1) |*id3v1_metadata| {
             std.debug.print("\nID3v1 Tag\n============\n", .{});
-            id3v1_metadata.metadata.dump();
+            id3v1_metadata.map.dump();
         }
     }
 }

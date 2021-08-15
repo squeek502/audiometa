@@ -12,10 +12,10 @@ const latin1ToUtf8Alloc = @import("latin1.zig").latin1ToUtf8Alloc;
 pub const id3v1_identifier = "TAG";
 
 pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !Metadata {
-    var metadata_container: Metadata = Metadata.init(allocator);
-    errdefer metadata_container.deinit();
+    var metadata: Metadata = Metadata.init(allocator);
+    errdefer metadata.deinit();
 
-    var metadata = &metadata_container.metadata;
+    var metadata_map = &metadata.map;
 
     var end_pos = try seekable_stream.getEndPos();
     if (end_pos < 128) {
@@ -23,8 +23,8 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
     }
 
     const start_offset = end_pos - 128;
-    metadata_container.start_offset = start_offset;
-    metadata_container.end_offset = end_pos;
+    metadata.start_offset = start_offset;
+    metadata.end_offset = end_pos;
 
     try seekable_stream.seekTo(start_offset);
     const data = try reader.readBytesNoEof(128);
@@ -44,38 +44,38 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
     if (song_name.len > 0) {
         var utf8_song_name = try latin1ToUtf8Alloc(allocator, song_name);
         defer allocator.free(utf8_song_name);
-        try metadata.put("title", utf8_song_name);
+        try metadata_map.put("title", utf8_song_name);
     }
     if (artist.len > 0) {
         var utf8_artist = try latin1ToUtf8Alloc(allocator, artist);
         defer allocator.free(utf8_artist);
-        try metadata.put("artist", utf8_artist);
+        try metadata_map.put("artist", utf8_artist);
     }
     if (album_name.len > 0) {
         var utf8_album_name = try latin1ToUtf8Alloc(allocator, album_name);
         defer allocator.free(utf8_album_name);
-        try metadata.put("album", utf8_album_name);
+        try metadata_map.put("album", utf8_album_name);
     }
     if (year.len > 0) {
         var utf8_year = try latin1ToUtf8Alloc(allocator, year);
         defer allocator.free(utf8_year);
-        try metadata.put("date", utf8_year);
+        try metadata_map.put("date", utf8_year);
     }
     if (comment.len > 0) {
         var utf8_comment = try latin1ToUtf8Alloc(allocator, comment);
         defer allocator.free(utf8_comment);
-        try metadata.put("comment", utf8_comment);
+        try metadata_map.put("comment", utf8_comment);
     }
     if (could_be_v1_1 and track_num > 0) {
         var buf: [3]u8 = undefined;
         const track_num_string = try std.fmt.bufPrint(buf[0..], "{}", .{track_num});
-        try metadata.put("track", track_num_string);
+        try metadata_map.put("track", track_num_string);
     }
     if (genre < id3v1_genre_names.len) {
-        try metadata.put("genre", id3v1_genre_names[genre]);
+        try metadata_map.put("genre", id3v1_genre_names[genre]);
     }
 
-    return metadata_container;
+    return metadata;
 }
 
 fn embedReadAndDump(comptime path: []const u8) !void {
@@ -84,7 +84,7 @@ fn embedReadAndDump(comptime path: []const u8) !void {
     var metadata = try read(std.testing.allocator, stream.reader(), stream.seekableStream());
     defer metadata.deinit();
 
-    metadata.metadata.dump();
+    metadata.map.dump();
 }
 
 test "mp3" {
@@ -100,7 +100,7 @@ test "empty" {
     var metadata = try read(std.testing.allocator, stream.reader(), stream.seekableStream());
     defer metadata.deinit();
 
-    metadata.metadata.dump();
+    metadata.map.dump();
 }
 
 pub const id3v1_genre_names = [_][]const u8{

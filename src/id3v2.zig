@@ -151,8 +151,8 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
 
         try metadata_buf.append(ID3v2Metadata.init(allocator, id3_header.major_version, start_offset));
         var metadata_id3v2_container = &metadata_buf.items[metadata_buf.items.len - 1];
-        var metadata_container = &metadata_id3v2_container.data;
-        var metadata = &metadata_container.metadata;
+        var metadata = &metadata_id3v2_container.metadata;
+        var metadata_map = &metadata.map;
 
         std.debug.print("tag v2.{}.{} size: 0x{X} flags: {}\n", .{ id3_header.major_version, id3_header.revision_num, id3_header.size, id3_header.flags });
 
@@ -167,12 +167,12 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
         var unsynch_reader = unsynch.unsynchCapableReader(should_read_unsynch, reader);
         var unsynch_capable_reader = unsynch_reader.reader();
 
-        metadata_container.end_offset = start_offset + id3_header_len + id3_header.size;
+        metadata.end_offset = start_offset + id3_header_len + id3_header.size;
         // Slightly hacky solution for trailing garbage/padding bytes at the end of the tag. Instead of
         // trying to read a tag that we know is invalid (since frame size has to be > 0
         // excluding the header), we can stop reading once there's not enough space left for
         // a valid tag to be read.
-        const tag_end_with_enough_space_for_valid_frame: usize = metadata_container.end_offset - frame_header_len;
+        const tag_end_with_enough_space_for_valid_frame: usize = metadata.end_offset - frame_header_len;
         std.debug.print("{} < {}\n", .{ (try seekable_stream.getPos()), tag_end_with_enough_space_for_valid_frame });
         while ((try seekable_stream.getPos()) < tag_end_with_enough_space_for_valid_frame) {
             var frame_header = try FrameHeader.read(unsynch_capable_reader, id3_header.major_version);
@@ -269,9 +269,9 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
                         const text = it.next().?;
                         if (is_user_defined) {
                             const value = it.next().?;
-                            try metadata.put(text, value);
+                            try metadata_map.put(text, value);
                         } else {
-                            try metadata.put(id, text);
+                            try metadata_map.put(id, text);
                         }
                     },
                     1, 2 => { // UTF-16 (1 = with BOM, 2 = without)
@@ -334,9 +334,9 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
                             var utf8_value = try std.unicode.utf16leToUtf8Alloc(allocator, value);
                             defer allocator.free(utf8_value);
 
-                            try metadata.put(utf8_text, utf8_value);
+                            try metadata_map.put(utf8_text, utf8_value);
                         } else {
-                            try metadata.put(id, utf8_text);
+                            try metadata_map.put(id, utf8_text);
                         }
                     },
                     3 => { // UTF-8
@@ -362,9 +362,9 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
                         const text = it.next().?;
                         if (is_user_defined) {
                             const value = it.next().?;
-                            try metadata.put(text, value);
+                            try metadata_map.put(text, value);
                         } else {
-                            try metadata.put(id, text);
+                            try metadata_map.put(id, text);
                         }
                     },
                     else => unreachable,
@@ -423,14 +423,14 @@ fn embedReadAndDump(comptime path: []const u8) !void {
 
     for (metadata_slice) |*id3v2_metadata| {
         std.debug.print("\nID3v2 major_version: {}\n", .{id3v2_metadata.major_version});
-        id3v2_metadata.data.metadata.dump();
+        id3v2_metadata.metadata.map.dump();
     }
 
     var all_meta = @import("metadata.zig").AllMetadata{
         .allocator = std.testing.allocator,
-        .flac_metadata = null,
-        .id3v1_metadata = null,
-        .id3v2_metadata = metadata_slice,
+        .flac = null,
+        .id3v1 = null,
+        .all_id3v2 = metadata_slice,
     };
     var coalesced = try @import("ffmpeg_compat.zig").coalesceMetadata(std.testing.allocator, &all_meta);
     defer coalesced.deinit();
