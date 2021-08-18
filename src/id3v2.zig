@@ -123,6 +123,211 @@ pub fn skip(reader: anytype, seekable_stream: anytype) !void {
     return seekable_stream.seekBy(header.size);
 }
 
+pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekable_stream: anytype, metadata_id3v2_container: *ID3v2Metadata, max_frame_size: usize) !void {
+    const id3_major_version = metadata_id3v2_container.major_version;
+    var metadata = &metadata_id3v2_container.metadata;
+    const start_offset = metadata.start_offset;
+    var metadata_map = &metadata.map;
+
+    var frame_header = try FrameHeader.read(unsynch_capable_reader, id3_major_version);
+    std.debug.print("{} {s}\n", .{ frame_header, std.fmt.fmtSliceEscapeUpper(frame_header.idSlice(id3_major_version)) });
+
+    // validate frame_header and bail out if its too crazy
+    frame_header.validate(id3_major_version, max_frame_size) catch {
+        std.debug.print("frame header failed to validate\n", .{});
+        try seekable_stream.seekTo(start_offset + ID3Header.len + max_frame_size);
+        return error.InvalidFrameHeader;
+    };
+
+    // this is technically not valid AFAIK but ffmpeg seems to accept
+    // it without failing the parse, so just skip it
+    // TODO: zero sized T-type frames? would ffprobe output that?
+    if (frame_header.size == 0) return;
+
+    // sometimes v2.4 encoders don't use synchsafe integers for their frame sizes
+    // so we need to double check
+    if (id3_major_version >= 4) {
+        const cur_pos = try seekable_stream.getPos();
+        synchsafe_check: {
+            const after_frame_u32 = cur_pos + frame_header.raw_size;
+            const after_frame_synchsafe = cur_pos + frame_header.size;
+
+            seekable_stream.seekTo(after_frame_synchsafe) catch break :synchsafe_check;
+            const next_frame_header_synchsafe = FrameHeader.read(unsynch_capable_reader, id3_major_version) catch break :synchsafe_check;
+
+            if (next_frame_header_synchsafe.validate(id3_major_version, max_frame_size)) {
+                break :synchsafe_check;
+            } else |_| {}
+
+            seekable_stream.seekTo(after_frame_u32) catch break :synchsafe_check;
+            const next_frame_header_u32 = FrameHeader.read(unsynch_capable_reader, id3_major_version) catch break :synchsafe_check;
+
+            next_frame_header_u32.validate(id3_major_version, max_frame_size) catch break :synchsafe_check;
+
+            // if we got here then this is the better size
+            frame_header.size = frame_header.raw_size;
+        }
+        try seekable_stream.seekTo(cur_pos);
+    }
+
+    // has a text encoding byte at the start
+    if (frame_header.id[0] == 'T') {
+        var text_data_size = frame_header.size;
+
+        if (frame_header.has_data_length_indicator()) {
+            //const frame_data_length_raw = try unsynch_capable_reader.readIntBig(u32);
+            //const frame_data_length = synchsafe.decode(u32, frame_data_length_raw);
+            //std.debug.print("frame length from extra field: {x}\n", .{frame_data_length});
+            try unsynch_capable_reader.skipBytes(4, .{});
+            text_data_size -= 4;
+        }
+
+        const encoding_byte = try unsynch_capable_reader.readByte();
+        text_data_size -= 1;
+
+        if (text_data_size == 0) return;
+
+        // Treat as NUL terminated because some v2.3 tags will use 3 length IDs
+        // with a NUL as the 4th char, and we should handle those as NUL terminated
+        const id = nulTerminated(frame_header.idSlice(id3_major_version));
+        const user_defined_id = switch (id.len) {
+            3 => "TXX",
+            else => "TXXX",
+        };
+        const is_user_defined = std.mem.eql(u8, id, user_defined_id);
+
+        switch (encoding_byte) {
+            0 => { // ISO-8859-1 aka latin1
+                var text_data = try allocator.alloc(u8, text_data_size);
+                defer allocator.free(text_data);
+
+                try unsynch_capable_reader.readNoEof(text_data);
+
+                if (frame_header.unsynchronised()) {
+                    var decoded_text_data = try allocator.alloc(u8, text_data_size);
+                    decoded_text_data = unsynch.decode(text_data, decoded_text_data);
+
+                    allocator.free(text_data);
+                    text_data = decoded_text_data;
+                }
+
+                var utf8_text = try latin1.latin1ToUtf8Alloc(allocator, text_data);
+                defer allocator.free(utf8_text);
+
+                var it = SplitIterator(u8){
+                    .buffer = utf8_text,
+                    .index = 0,
+                    .delimiter = "\x00",
+                };
+
+                const text = it.next().?;
+                if (is_user_defined) {
+                    const value = it.next().?;
+                    try metadata_map.put(text, value);
+                } else {
+                    try metadata_map.put(id, text);
+                }
+            },
+            1, 2 => { // UTF-16 (1 = with BOM, 2 = without)
+                const has_bom = encoding_byte == 1;
+                const u16_align = @alignOf(u16);
+                var text_data = try allocator.allocWithOptions(u8, text_data_size, u16_align, null);
+                defer allocator.free(text_data);
+
+                try unsynch_capable_reader.readNoEof(text_data);
+
+                if (frame_header.unsynchronised()) {
+                    var decoded_text_data = try allocator.allocWithOptions(u8, text_data_size, u16_align, null);
+                    decoded_text_data = @alignCast(u16_align, unsynch.decode(text_data, decoded_text_data));
+
+                    allocator.free(text_data);
+                    text_data = decoded_text_data;
+                }
+
+                if (text_data.len % 2 != 0) {
+                    // there could be an erroneous trailing single char nul-terminator
+                    // or garbage. if so, just ignore it and pretend it doesn't exist
+                    text_data = text_data[0..(text_data.len - 1)];
+                }
+
+                var utf16_text = @alignCast(u16_align, std.mem.bytesAsSlice(u16, text_data));
+
+                // if this is big endian, then swap everything to little endian up front
+                // TODO: I feel like this probably won't handle big endian native architectures correctly
+                if (has_bom) {
+                    const bom = utf16_text[0];
+                    if (bom == 0xFFFE) {
+                        for (utf16_text) |c, i| {
+                            utf16_text[i] = @byteSwap(u16, c);
+                        }
+                    }
+                }
+
+                var it = SplitIterator(u16){
+                    .buffer = utf16_text,
+                    .index = 0,
+                    .delimiter = &[_]u16{0x0000},
+                };
+
+                var text = it.next().?;
+                if (has_bom) {
+                    // check for byte order mark and skip it
+                    assert(text[0] == 0xFEFF);
+                    text = text[1..];
+                }
+                var utf8_text = try std.unicode.utf16leToUtf8Alloc(allocator, text);
+                defer allocator.free(utf8_text);
+
+                if (is_user_defined) {
+                    var value = it.next().?;
+                    if (has_bom) {
+                        // check for byte order mark and skip it
+                        assert(value[0] == 0xFEFF);
+                        value = value[1..];
+                    }
+                    var utf8_value = try std.unicode.utf16leToUtf8Alloc(allocator, value);
+                    defer allocator.free(utf8_value);
+
+                    try metadata_map.put(utf8_text, utf8_value);
+                } else {
+                    try metadata_map.put(id, utf8_text);
+                }
+            },
+            3 => { // UTF-8
+                var text_data = try allocator.alloc(u8, text_data_size);
+                defer allocator.free(text_data);
+
+                try unsynch_capable_reader.readNoEof(text_data);
+
+                if (frame_header.unsynchronised()) {
+                    var decoded_text_data = try allocator.alloc(u8, text_data_size);
+                    decoded_text_data = unsynch.decode(text_data, decoded_text_data);
+
+                    allocator.free(text_data);
+                    text_data = decoded_text_data;
+                }
+
+                var it = SplitIterator(u8){
+                    .buffer = text_data,
+                    .index = 0,
+                    .delimiter = "\x00",
+                };
+
+                const text = it.next().?;
+                if (is_user_defined) {
+                    const value = it.next().?;
+                    try metadata_map.put(text, value);
+                } else {
+                    try metadata_map.put(id, text);
+                }
+            },
+            else => unreachable,
+        }
+    } else {
+        try unsynch_capable_reader.skipBytes(frame_header.size, .{});
+    }
+}
+
 pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![]ID3v2Metadata {
     var metadata_buf = std.ArrayList(ID3v2Metadata).init(allocator);
     errdefer {
@@ -152,7 +357,6 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
         try metadata_buf.append(ID3v2Metadata.init(allocator, id3_header.major_version, start_offset));
         var metadata_id3v2_container = &metadata_buf.items[metadata_buf.items.len - 1];
         var metadata = &metadata_id3v2_container.metadata;
-        var metadata_map = &metadata.map;
 
         std.debug.print("tag v2.{}.{} size: 0x{X} flags: {}\n", .{ id3_header.major_version, id3_header.revision_num, id3_header.size, id3_header.flags });
 
@@ -175,203 +379,10 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
         const tag_end_with_enough_space_for_valid_frame: usize = metadata.end_offset - frame_header_len;
         std.debug.print("{} < {}\n", .{ (try seekable_stream.getPos()), tag_end_with_enough_space_for_valid_frame });
         while ((try seekable_stream.getPos()) < tag_end_with_enough_space_for_valid_frame) {
-            var frame_header = try FrameHeader.read(unsynch_capable_reader, id3_header.major_version);
-            std.debug.print("{} {s}\n", .{ frame_header, std.fmt.fmtSliceEscapeUpper(frame_header.idSlice(id3_header.major_version)) });
-
-            // validate frame_header and bail out if its too crazy
-            frame_header.validate(id3_header.major_version, id3_header.size) catch {
-                std.debug.print("frame header failed to validate\n", .{});
-                try seekable_stream.seekTo(start_offset + id3_header_len + id3_header.size);
-                break;
+            readFrame(allocator, unsynch_capable_reader, seekable_stream, metadata_id3v2_container, id3_header.size) catch |e| switch (e) {
+                error.InvalidFrameHeader => break,
+                else => |err| return err,
             };
-
-            // this is technically not valid AFAIK but ffmpeg seems to accept
-            // it without failing the parse, so just skip it
-            // TODO: zero sized T-type frames? would ffprobe output that?
-            if (frame_header.size == 0) continue;
-
-            // sometimes v2.4 encoders don't use synchsafe integers for their frame sizes
-            // so we need to double check
-            if (id3_header.major_version >= 4) {
-                const cur_pos = try seekable_stream.getPos();
-                synchsafe_check: {
-                    const after_frame_u32 = cur_pos + frame_header.raw_size;
-                    const after_frame_synchsafe = cur_pos + frame_header.size;
-
-                    seekable_stream.seekTo(after_frame_synchsafe) catch break :synchsafe_check;
-                    const next_frame_header_synchsafe = FrameHeader.read(unsynch_capable_reader, id3_header.major_version) catch break :synchsafe_check;
-
-                    if (next_frame_header_synchsafe.validate(id3_header.major_version, id3_header.size)) {
-                        break :synchsafe_check;
-                    } else |_| {}
-
-                    seekable_stream.seekTo(after_frame_u32) catch break :synchsafe_check;
-                    const next_frame_header_u32 = FrameHeader.read(unsynch_capable_reader, id3_header.major_version) catch break :synchsafe_check;
-
-                    next_frame_header_u32.validate(id3_header.major_version, id3_header.size) catch break :synchsafe_check;
-
-                    // if we got here then this is the better size
-                    frame_header.size = frame_header.raw_size;
-                }
-                try seekable_stream.seekTo(cur_pos);
-            }
-
-            // has a text encoding byte at the start
-            if (frame_header.id[0] == 'T') {
-                var text_data_size = frame_header.size;
-
-                if (frame_header.has_data_length_indicator()) {
-                    //const frame_data_length_raw = try unsynch_capable_reader.readIntBig(u32);
-                    //const frame_data_length = synchsafe.decode(u32, frame_data_length_raw);
-                    //std.debug.print("frame length from extra field: {x}\n", .{frame_data_length});
-                    try unsynch_capable_reader.skipBytes(4, .{});
-                    text_data_size -= 4;
-                }
-
-                const encoding_byte = try unsynch_capable_reader.readByte();
-                text_data_size -= 1;
-
-                if (text_data_size == 0) continue;
-
-                // Treat as NUL terminated because some v2.3 tags will use 3 length IDs
-                // with a NUL as the 4th char, and we should handle those as NUL terminated
-                const id = nulTerminated(frame_header.idSlice(id3_header.major_version));
-                const user_defined_id = switch (id.len) {
-                    3 => "TXX",
-                    else => "TXXX",
-                };
-                const is_user_defined = std.mem.eql(u8, id, user_defined_id);
-
-                switch (encoding_byte) {
-                    0 => { // ISO-8859-1 aka latin1
-                        var text_data = try allocator.alloc(u8, text_data_size);
-                        defer allocator.free(text_data);
-
-                        try unsynch_capable_reader.readNoEof(text_data);
-
-                        if (frame_header.unsynchronised()) {
-                            var decoded_text_data = try allocator.alloc(u8, text_data_size);
-                            decoded_text_data = unsynch.decode(text_data, decoded_text_data);
-
-                            allocator.free(text_data);
-                            text_data = decoded_text_data;
-                        }
-
-                        var utf8_text = try latin1.latin1ToUtf8Alloc(allocator, text_data);
-                        defer allocator.free(utf8_text);
-
-                        var it = SplitIterator(u8){
-                            .buffer = utf8_text,
-                            .index = 0,
-                            .delimiter = "\x00",
-                        };
-
-                        const text = it.next().?;
-                        if (is_user_defined) {
-                            const value = it.next().?;
-                            try metadata_map.put(text, value);
-                        } else {
-                            try metadata_map.put(id, text);
-                        }
-                    },
-                    1, 2 => { // UTF-16 (1 = with BOM, 2 = without)
-                        const has_bom = encoding_byte == 1;
-                        const u16_align = @alignOf(u16);
-                        var text_data = try allocator.allocWithOptions(u8, text_data_size, u16_align, null);
-                        defer allocator.free(text_data);
-
-                        try unsynch_capable_reader.readNoEof(text_data);
-
-                        if (frame_header.unsynchronised()) {
-                            var decoded_text_data = try allocator.allocWithOptions(u8, text_data_size, u16_align, null);
-                            decoded_text_data = @alignCast(u16_align, unsynch.decode(text_data, decoded_text_data));
-
-                            allocator.free(text_data);
-                            text_data = decoded_text_data;
-                        }
-
-                        if (text_data.len % 2 != 0) {
-                            // there could be an erroneous trailing single char nul-terminator
-                            // or garbage. if so, just ignore it and pretend it doesn't exist
-                            text_data = text_data[0..(text_data.len - 1)];
-                        }
-
-                        var utf16_text = @alignCast(u16_align, std.mem.bytesAsSlice(u16, text_data));
-
-                        // if this is big endian, then swap everything to little endian up front
-                        // TODO: I feel like this probably won't handle big endian native architectures correctly
-                        if (has_bom) {
-                            const bom = utf16_text[0];
-                            if (bom == 0xFFFE) {
-                                for (utf16_text) |c, i| {
-                                    utf16_text[i] = @byteSwap(u16, c);
-                                }
-                            }
-                        }
-
-                        var it = SplitIterator(u16){
-                            .buffer = utf16_text,
-                            .index = 0,
-                            .delimiter = &[_]u16{0x0000},
-                        };
-
-                        var text = it.next().?;
-                        if (has_bom) {
-                            // check for byte order mark and skip it
-                            assert(text[0] == 0xFEFF);
-                            text = text[1..];
-                        }
-                        var utf8_text = try std.unicode.utf16leToUtf8Alloc(allocator, text);
-                        defer allocator.free(utf8_text);
-
-                        if (is_user_defined) {
-                            var value = it.next().?;
-                            if (has_bom) {
-                                // check for byte order mark and skip it
-                                assert(value[0] == 0xFEFF);
-                                value = value[1..];
-                            }
-                            var utf8_value = try std.unicode.utf16leToUtf8Alloc(allocator, value);
-                            defer allocator.free(utf8_value);
-
-                            try metadata_map.put(utf8_text, utf8_value);
-                        } else {
-                            try metadata_map.put(id, utf8_text);
-                        }
-                    },
-                    3 => { // UTF-8
-                        var text_data = try allocator.alloc(u8, text_data_size);
-                        defer allocator.free(text_data);
-
-                        try unsynch_capable_reader.readNoEof(text_data);
-
-                        if (frame_header.unsynchronised()) {
-                            var decoded_text_data = try allocator.alloc(u8, text_data_size);
-                            decoded_text_data = unsynch.decode(text_data, decoded_text_data);
-
-                            allocator.free(text_data);
-                            text_data = decoded_text_data;
-                        }
-
-                        var it = SplitIterator(u8){
-                            .buffer = text_data,
-                            .index = 0,
-                            .delimiter = "\x00",
-                        };
-
-                        const text = it.next().?;
-                        if (is_user_defined) {
-                            const value = it.next().?;
-                            try metadata_map.put(text, value);
-                        } else {
-                            try metadata_map.put(id, text);
-                        }
-                    },
-                    else => unreachable,
-                }
-            } else {
-                try unsynch_capable_reader.skipBytes(frame_header.size, .{});
-            }
         }
     }
 
