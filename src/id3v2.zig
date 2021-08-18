@@ -126,7 +126,6 @@ pub fn skip(reader: anytype, seekable_stream: anytype) !void {
 pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekable_stream: anytype, metadata_id3v2_container: *ID3v2Metadata, max_frame_size: usize) !void {
     const id3_major_version = metadata_id3v2_container.major_version;
     var metadata = &metadata_id3v2_container.metadata;
-    const start_offset = metadata.start_offset;
     var metadata_map = &metadata.map;
 
     var frame_header = try FrameHeader.read(unsynch_capable_reader, id3_major_version);
@@ -135,7 +134,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
     // validate frame_header and bail out if its too crazy
     frame_header.validate(id3_major_version, max_frame_size) catch {
         std.debug.print("frame header failed to validate\n", .{});
-        try seekable_stream.seekTo(start_offset + ID3Header.len + max_frame_size);
+        try seekable_stream.seekTo(metadata.end_offset);
         return error.InvalidFrameHeader;
     };
 
