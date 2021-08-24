@@ -42,17 +42,22 @@ pub fn UnsynchCapableReader(comptime ReaderType: type) type {
                 // this is sad
                 // TODO: something better
                 var num_read: usize = 0;
-                var prev_byte: u8 = 0;
+                var prev_byte: ?u8 = null;
                 while (num_read < dest.len) {
                     const byte = self.child_reader.readByte() catch |e| switch (e) {
                         error.EndOfStream => return num_read,
                         else => |err| return err,
                     };
-                    const should_skip = byte == '\x00' and prev_byte == '\xFF';
+                    const should_skip = byte == '\x00' and prev_byte != null and prev_byte.? == '\xFF';
                     if (!should_skip) {
                         dest[num_read] = byte;
                         num_read += 1;
                         prev_byte = byte;
+                    } else {
+                        // FF0000 should be decoded as FF00, so reset
+                        // for each skipped byte so we don't run into the next
+                        // and decode FF0000 all the way to just FF
+                        prev_byte = null;
                     }
                 }
                 return num_read;
@@ -82,13 +87,13 @@ test "unsynch decode" {
 }
 
 test "unsynch reader" {
-    const encoded = "\xFF\x00\xFE\xFF\x00";
+    const encoded = "\xFF\x00\x00\xFE\xFF\x00";
     var buf: [encoded.len]u8 = undefined;
     var stream = std.io.fixedBufferStream(encoded);
     var reader = unsynchCapableReader(true, stream.reader()).reader();
 
     const decoded_len = try reader.read(&buf);
 
-    try std.testing.expectEqual(decoded_len, 3);
-    try std.testing.expectEqualSlices(u8, "\xFF\xFE\xFF", buf[0..decoded_len]);
+    try std.testing.expectEqual(decoded_len, 4);
+    try std.testing.expectEqualStrings("\xFF\x00\xFE\xFF", buf[0..decoded_len]);
 }
