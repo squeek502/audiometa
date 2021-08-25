@@ -129,11 +129,9 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
     var metadata_map = &metadata.map;
 
     var frame_header = try FrameHeader.read(unsynch_capable_reader, id3_major_version);
-    std.debug.print("{} {s}\n", .{ frame_header, std.fmt.fmtSliceEscapeUpper(frame_header.idSlice(id3_major_version)) });
 
     // validate frame_header and bail out if its too crazy
     frame_header.validate(id3_major_version, max_frame_size) catch {
-        std.debug.print("frame header failed to validate\n", .{});
         try seekable_stream.seekTo(metadata.end_offset);
         return error.InvalidFrameHeader;
     };
@@ -176,7 +174,6 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
         if (frame_header.has_data_length_indicator()) {
             //const frame_data_length_raw = try unsynch_capable_reader.readIntBig(u32);
             //const frame_data_length = synchsafe.decode(u32, frame_data_length_raw);
-            //std.debug.print("frame length from extra field: {x}\n", .{frame_data_length});
             try unsynch_capable_reader.skipBytes(4, .{});
             text_data_size -= 4;
         }
@@ -334,8 +331,6 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
 
     while (true) : (is_duplicate_tag = true) {
         const start_offset = try seekable_stream.getPos();
-
-        std.debug.print("trying to read header at offset 0x{X}\n", .{try seekable_stream.getPos()});
         const id3_header = ID3Header.read(reader) catch |e| switch (e) {
             error.EndOfStream, error.InvalidIdentifier => |err| {
                 if (is_duplicate_tag) {
@@ -351,15 +346,12 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
         var metadata_id3v2_container = &metadata_buf.items[metadata_buf.items.len - 1];
         var metadata = &metadata_id3v2_container.metadata;
 
-        std.debug.print("tag v2.{}.{} size: 0x{X} flags: {}\n", .{ id3_header.major_version, id3_header.revision_num, id3_header.size, id3_header.flags });
-
         const id3_header_len = ID3Header.len;
         const frame_header_len = FrameHeader.len(id3_header.major_version);
 
         const tag_unsynch = id3_header.unsynchronised();
         const should_read_and_then_decode = id3_header.major_version > 3;
         const should_read_unsynch = tag_unsynch and !should_read_and_then_decode;
-        std.debug.print("unsynch: {} decode separately: {}\n", .{ tag_unsynch, should_read_and_then_decode });
 
         var unsynch_reader = unsynch.unsynchCapableReader(should_read_unsynch, reader);
         var unsynch_capable_reader = unsynch_reader.reader();
@@ -370,7 +362,6 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
         // excluding the header), we can stop reading once there's not enough space left for
         // a valid tag to be read.
         const tag_end_with_enough_space_for_valid_frame: usize = metadata.end_offset - frame_header_len;
-        std.debug.print("{} < {}\n", .{ (try seekable_stream.getPos()), tag_end_with_enough_space_for_valid_frame });
         while ((try seekable_stream.getPos()) < tag_end_with_enough_space_for_valid_frame) {
             readFrame(allocator, unsynch_capable_reader, seekable_stream, metadata_id3v2_container, id3_header.size, unsynch_reader.unsynch) catch |e| switch (e) {
                 error.InvalidFrameHeader => break,
