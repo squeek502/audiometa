@@ -308,7 +308,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
                     try metadata_map.put(id, text);
                 }
             },
-            else => unreachable,
+            else => return error.InvalidTextEncodingByte,
         }
     } else {
         try unsynch_capable_reader.skipBytes(frame_header.size, .{});
