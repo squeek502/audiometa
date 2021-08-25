@@ -123,7 +123,7 @@ pub fn skip(reader: anytype, seekable_stream: anytype) !void {
     return seekable_stream.seekBy(header.size);
 }
 
-pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekable_stream: anytype, metadata_id3v2_container: *ID3v2Metadata, max_frame_size: usize) !void {
+pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekable_stream: anytype, metadata_id3v2_container: *ID3v2Metadata, max_frame_size: usize, is_full_unsynch: bool) !void {
     const id3_major_version = metadata_id3v2_container.major_version;
     var metadata = &metadata_id3v2_container.metadata;
     var metadata_map = &metadata.map;
@@ -324,6 +324,12 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
         }
     } else {
         try unsynch_capable_reader.skipBytes(frame_header.size, .{});
+        if (is_full_unsynch) {
+            try unsynch_capable_reader.skipBytes(frame_header.size, .{});
+        } else {
+            // if the tag is not full unsynch, then we can just skip without reading
+            try seekable_stream.seekBy(frame_header.size);
+        }
     }
 }
 
@@ -378,7 +384,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
         const tag_end_with_enough_space_for_valid_frame: usize = metadata.end_offset - frame_header_len;
         std.debug.print("{} < {}\n", .{ (try seekable_stream.getPos()), tag_end_with_enough_space_for_valid_frame });
         while ((try seekable_stream.getPos()) < tag_end_with_enough_space_for_valid_frame) {
-            readFrame(allocator, unsynch_capable_reader, seekable_stream, metadata_id3v2_container, id3_header.size) catch |e| switch (e) {
+            readFrame(allocator, unsynch_capable_reader, seekable_stream, metadata_id3v2_container, id3_header.size, unsynch_reader.unsynch) catch |e| switch (e) {
                 error.InvalidFrameHeader => break,
                 else => |err| return err,
             };

@@ -60,7 +60,9 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
                 user_comment_offset += 4 + comment_length;
             }
         } else {
-            try reader.skipBytes(length, .{});
+            // skipping bytes in the reader actually reads the bytes which is a
+            // huge waste of time, this is way faster
+            try seekable_stream.seekBy(length);
         }
 
         if (is_last_metadata_block) break;
