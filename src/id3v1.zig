@@ -7,7 +7,7 @@ const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
 const nulTerminated = @import("util.zig").nulTerminated;
 const unsynch = @import("unsynch.zig");
 const Metadata = @import("metadata.zig").Metadata;
-const latin1ToUtf8Alloc = @import("latin1.zig").latin1ToUtf8Alloc;
+const latin1ToUtf8 = @import("latin1.zig").latin1ToUtf8;
 
 pub const id3v1_identifier = "TAG";
 
@@ -41,29 +41,27 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
     const track_num = data[126];
     const genre = data[127];
 
+    // 60 is twice as large as the largest id3v1 field
+    var utf8_buf: [60]u8 = undefined;
+
     if (song_name.len > 0) {
-        var utf8_song_name = try latin1ToUtf8Alloc(allocator, song_name);
-        defer allocator.free(utf8_song_name);
+        var utf8_song_name = latin1ToUtf8(song_name, &utf8_buf);
         try metadata_map.put("title", utf8_song_name);
     }
     if (artist.len > 0) {
-        var utf8_artist = try latin1ToUtf8Alloc(allocator, artist);
-        defer allocator.free(utf8_artist);
+        var utf8_artist = latin1ToUtf8(artist, &utf8_buf);
         try metadata_map.put("artist", utf8_artist);
     }
     if (album_name.len > 0) {
-        var utf8_album_name = try latin1ToUtf8Alloc(allocator, album_name);
-        defer allocator.free(utf8_album_name);
+        var utf8_album_name = latin1ToUtf8(album_name, &utf8_buf);
         try metadata_map.put("album", utf8_album_name);
     }
     if (year.len > 0) {
-        var utf8_year = try latin1ToUtf8Alloc(allocator, year);
-        defer allocator.free(utf8_year);
+        var utf8_year = latin1ToUtf8(year, &utf8_buf);
         try metadata_map.put("date", utf8_year);
     }
     if (comment.len > 0) {
-        var utf8_comment = try latin1ToUtf8Alloc(allocator, comment);
-        defer allocator.free(utf8_comment);
+        var utf8_comment = latin1ToUtf8(comment, &utf8_buf);
         try metadata_map.put("comment", utf8_comment);
     }
     if (could_be_v1_1 and track_num > 0) {
