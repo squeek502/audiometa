@@ -68,9 +68,9 @@ pub const ID3v2Metadata = struct {
     metadata: Metadata,
     major_version: u8,
 
-    pub fn init(allocator: *Allocator, major_version: u8, start_offset: usize) ID3v2Metadata {
+    pub fn init(allocator: *Allocator, major_version: u8, start_offset: usize, end_offset: usize) ID3v2Metadata {
         return .{
-            .metadata = Metadata.initWithStartOffset(allocator, start_offset),
+            .metadata = Metadata.initWithOffsets(allocator, start_offset, end_offset),
             .major_version = major_version,
         };
     }
@@ -86,14 +86,14 @@ pub const Metadata = struct {
     end_offset: usize,
 
     pub fn init(allocator: *Allocator) Metadata {
-        return Metadata.initWithStartOffset(allocator, undefined);
+        return Metadata.initWithOffsets(allocator, undefined, undefined);
     }
 
-    pub fn initWithStartOffset(allocator: *Allocator, start_offset: usize) Metadata {
+    pub fn initWithOffsets(allocator: *Allocator, start_offset: usize, end_offset: usize) Metadata {
         return .{
             .map = MetadataMap.init(allocator),
             .start_offset = start_offset,
-            .end_offset = undefined,
+            .end_offset = end_offset,
         };
     }
 
@@ -108,7 +108,7 @@ pub const MetadataMap = struct {
     entries: EntryList,
     name_to_indexes: NameToIndexesMap,
 
-    const Entry = struct {
+    pub const Entry = struct {
         name: []const u8,
         value: []const u8,
     };

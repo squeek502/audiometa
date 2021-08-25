@@ -32,6 +32,23 @@ pub const ID3Header = struct {
         };
     }
 
+    pub fn compressed(self: *const ID3Header) bool {
+        return self.major_version <= 2 and self.flags & (1 << 6) != 0;
+    }
+
+    pub fn hasExtendedHeader(self: *const ID3Header) bool {
+        return self.major_version >= 3 and self.flags & (1 << 6) != 0;
+    }
+
+    // TODO: handle footers
+    pub fn hasFooter(self: *const ID3Header) bool {
+        return self.major_version >= 4 and self.flags & (1 << 4) != 0;
+    }
+
+    pub fn experimental(self: *const ID3Header) bool {
+        return self.major_version >= 3 and self.flags & (1 << 5) != 0;
+    }
+
     pub fn unsynchronised(self: *const ID3Header) bool {
         return self.flags & (1 << 7) != 0;
     }
@@ -342,12 +359,16 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
             else => |err| return err,
         };
 
-        try metadata_buf.append(ID3v2Metadata.init(allocator, id3_header.major_version, start_offset));
+        const end_offset = start_offset + ID3Header.len + id3_header.size;
+        try metadata_buf.append(ID3v2Metadata.init(allocator, id3_header.major_version, start_offset, end_offset));
         var metadata_id3v2_container = &metadata_buf.items[metadata_buf.items.len - 1];
         var metadata = &metadata_id3v2_container.metadata;
 
-        const id3_header_len = ID3Header.len;
-        const frame_header_len = FrameHeader.len(id3_header.major_version);
+        // ID3v2.2 compression should just be skipped according to the spec
+        if (id3_header.compressed()) {
+            try seekable_stream.seekTo(end_offset);
+            continue;
+        }
 
         const tag_unsynch = id3_header.unsynchronised();
         const should_read_and_then_decode = id3_header.major_version > 3;
@@ -356,7 +377,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
         var unsynch_reader = unsynch.unsynchCapableReader(should_read_unsynch, reader);
         var unsynch_capable_reader = unsynch_reader.reader();
 
-        metadata.end_offset = start_offset + id3_header_len + id3_header.size;
+        const frame_header_len = FrameHeader.len(id3_header.major_version);
         // Slightly hacky solution for trailing garbage/padding bytes at the end of the tag. Instead of
         // trying to read a tag that we know is invalid (since frame size has to be > 0
         // excluding the header), we can stop reading once there's not enough space left for
