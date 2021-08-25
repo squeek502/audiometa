@@ -213,11 +213,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
                 var utf8_text = try latin1.latin1ToUtf8Alloc(allocator, text_data);
                 defer allocator.free(utf8_text);
 
-                var it = SplitIterator(u8){
-                    .buffer = utf8_text,
-                    .index = 0,
-                    .delimiter = "\x00",
-                };
+                var it = std.mem.split(u8, utf8_text, "\x00");
 
                 const text = it.next().?;
                 if (is_user_defined) {
@@ -262,11 +258,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
                     }
                 }
 
-                var it = SplitIterator(u16){
-                    .buffer = utf16_text,
-                    .index = 0,
-                    .delimiter = &[_]u16{0x0000},
-                };
+                var it = std.mem.split(u16, utf16_text, &[_]u16{0x0000});
 
                 var text = it.next().?;
                 if (has_bom) {
@@ -306,11 +298,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
                     text_data = decoded_text_data;
                 }
 
-                var it = SplitIterator(u8){
-                    .buffer = text_data,
-                    .index = 0,
-                    .delimiter = "\x00",
-                };
+                var it = std.mem.split(u8, text_data, "\x00");
 
                 const text = it.next().?;
                 if (is_user_defined) {
@@ -392,38 +380,6 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
     }
 
     return metadata_buf.toOwnedSlice();
-}
-
-// copy of std.mem.SplitIterator but with a user-supplied type
-// TODO: remove if https://github.com/ziglang/zig/pull/9531 gets merged
-pub fn SplitIterator(comptime T: type) type {
-    return struct {
-        buffer: []const T,
-        index: ?usize,
-        delimiter: []const T,
-
-        const Self = @This();
-
-        /// Returns a slice of the next field, or null if splitting is complete.
-        pub fn next(self: *Self) ?[]const T {
-            const start = self.index orelse return null;
-            const end = if (std.mem.indexOfPos(T, self.buffer, start, self.delimiter)) |delim_start| blk: {
-                self.index = delim_start + self.delimiter.len;
-                break :blk delim_start;
-            } else blk: {
-                self.index = null;
-                break :blk self.buffer.len;
-            };
-            return self.buffer[start..end];
-        }
-
-        /// Returns a slice of the remaining bytes. Does not affect iterator state.
-        pub fn rest(self: Self) []const T {
-            const end = self.buffer.len;
-            const start = self.index orelse end;
-            return self.buffer[start..end];
-        }
-    };
 }
 
 fn embedReadAndDump(comptime path: []const u8) !void {
