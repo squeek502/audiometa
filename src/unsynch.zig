@@ -42,23 +42,21 @@ pub fn UnsynchCapableReader(comptime ReaderType: type) type {
                 // this is sad
                 // TODO: something better
                 var num_read: usize = 0;
-                var prev_byte: ?u8 = null;
+                var prev_byte: u8 = 0;
                 while (num_read < dest.len) {
                     const byte = self.child_reader.readByte() catch |e| switch (e) {
                         error.EndOfStream => return num_read,
                         else => |err| return err,
                     };
-                    const should_skip = byte == '\x00' and prev_byte != null and prev_byte.? == '\xFF';
+                    const should_skip = byte == '\x00' and prev_byte == '\xFF';
                     if (!should_skip) {
                         dest[num_read] = byte;
                         num_read += 1;
-                        prev_byte = byte;
-                    } else {
-                        // FF0000 should be decoded as FF00, so reset
-                        // for each skipped byte so we don't run into the next
-                        // and decode FF0000 all the way to just FF
-                        prev_byte = null;
                     }
+                    // FF0000 should be decoded as FF00, so set prev_byte
+                    // for each byte, even if it's skipped, so we don't
+                    // decode FF0000 all the way to just FF
+                    prev_byte = byte;
                 }
                 return num_read;
             } else {
@@ -77,13 +75,13 @@ pub fn unsynchCapableReader(unsynch: bool, underlying_stream: anytype) UnsynchCa
 }
 
 test "unsynch decode" {
-    const encoded = "\xFF\x00\xFE\xFF\x00";
+    const encoded = "\xFF\x00\x00\xFE\xFF\x00";
     var buf: [encoded.len]u8 = undefined;
 
     var decoded = decode(encoded, &buf);
 
-    try std.testing.expectEqual(decoded.len, 3);
-    try std.testing.expectEqualSlices(u8, "\xFF\xFE\xFF", decoded);
+    try std.testing.expectEqual(decoded.len, 4);
+    try std.testing.expectEqualSlices(u8, "\xFF\x00\xFE\xFF", decoded);
 }
 
 test "unsynch reader" {
