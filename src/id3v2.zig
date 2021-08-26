@@ -325,7 +325,6 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
             else => return error.InvalidTextEncodingByte,
         }
     } else {
-        try unsynch_capable_reader.skipBytes(frame_header.size, .{});
         if (is_full_unsynch) {
             try unsynch_capable_reader.skipBytes(frame_header.size, .{});
         } else {
