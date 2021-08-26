@@ -370,12 +370,27 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
             continue;
         }
 
+        // TODO: explain this bit of code
         const tag_unsynch = id3_header.unsynchronised();
-        const should_read_and_then_decode = id3_header.major_version > 3;
+        const should_read_and_then_decode = id3_header.major_version >= 4;
         const should_read_unsynch = tag_unsynch and !should_read_and_then_decode;
 
         var unsynch_reader = unsynch.unsynchCapableReader(should_read_unsynch, reader);
         var unsynch_capable_reader = unsynch_reader.reader();
+
+        // Skip past extended header if it exists
+        if (id3_header.hasExtendedHeader()) {
+            const extended_header_size: u32 = try unsynch_capable_reader.readIntBig(u32);
+            // In ID3v2.4, extended header size is a synchsafe integer and includes the size bytes
+            // in its reported size. In earlier versions, it is not synchsafe and excludes the size bytes.
+            if (id3_header.major_version >= 4) {
+                const synchsafe_extended_header_size = synchsafe.decode(u32, extended_header_size);
+                const remaining_extended_header_size = synchsafe_extended_header_size - 4;
+                try seekable_stream.seekBy(remaining_extended_header_size);
+            } else {
+                try seekable_stream.seekBy(extended_header_size);
+            }
+        }
 
         const frame_header_len = FrameHeader.len(id3_header.major_version);
         // Slightly hacky solution for trailing garbage/padding bytes at the end of the tag. Instead of
