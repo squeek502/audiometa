@@ -369,11 +369,37 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
             continue;
         }
 
-        // TODO: explain this bit of code
+        // Unsynchronisation is weird. As I understand it:
+        //
+        // For ID3v2.3:
+        // - Either *all* of a tag has been unsynched or none of it has (the tag header
+        //   itself has an 'unsynch' flag)
+        // - The full tag size is the final size (after unsynchronization), but all data
+        //   within the tag is set *before* synchronization, so that means all
+        //   extra bytes added by unsynchronization must be skipped during decoding
+        //  + The spec is fairly unclear about the order of operations here, but this
+        //    seems to be the case for all of the unsynch 2.3 files in my collection
+        // - Frame sizes are not written as synchsafe integers, so the size itself must
+        //   be decoded and extra bytes must be ignored while reading it
+        // This means that for ID3v2.3, unsynch tags should discard all extra bytes while
+        // reading the tag (i.e. if a frame size is 4, you should read *at least* 4 bytes,
+        // skipping over any extra bytes added by unsynchronization; the decoded size
+        // will match the given frame size)
+        //
+        // For ID3v2.4:
+        // - Frame headers use synchsafe integers and therefore the frame headers
+        //   are guaranteed to be synchsafe.
+        // - ID3v2.4 doesn't have a tag-wide 'unsynch' flag and instead frames have
+        //   an 'unsynch' flag.
+        // - ID3v2.4 spec states: 'size descriptor [contains] the size of
+        //   the data in the final frame, after encryption, compression and
+        //   unsynchronisation'
+        // This means that for ID3v2.4, unsynch frames should be read using the given size
+        // and then decoded (i.e. if size is 4, you should read 4 bytes and then decode them;
+        // the decoded size could end up being smaller)
         const tag_unsynch = id3_header.unsynchronised();
         const should_read_and_then_decode = id3_header.major_version >= 4;
         const should_read_unsynch = tag_unsynch and !should_read_and_then_decode;
-
         var unsynch_reader = unsynch.unsynchCapableReader(should_read_unsynch, reader);
         var unsynch_capable_reader = unsynch_reader.reader();
 
