@@ -4,10 +4,24 @@ const id3v1 = @import("id3v1.zig");
 const flac = @import("flac.zig");
 const Allocator = std.mem.Allocator;
 const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
+const BufferedStreamSource = @import("buffered_stream_source.zig").BufferedStreamSource;
 
 pub fn readAll(allocator: *Allocator, stream_source: *std.io.StreamSource) !AllMetadata {
-    var reader = stream_source.reader();
-    var seekable_stream = stream_source.seekableStream();
+    // Note: Using a buffered stream source here doesn't actually seem to make much
+    // difference performance-wise for most files. However, it probably does give a performance
+    // boost when reading unsynch files, since UnsynchCapableReader reads byte-by-byte
+    // when it's reading ID3v2.3 unsynch tags.
+    //
+    // TODO: unsynch ID3v2.3 tags might be rare enough that the buffering is just
+    // not necessary
+    //
+    // Also, if the buffer is too large then it seems to actually start slowing things down,
+    // presumably because it starts filling the buffer with bytes that are going to be skipped
+    // anyway so it's just doing extra work for no reason.
+    const buffer_size = 512;
+    var buffered_stream_source = BufferedStreamSource(buffer_size).init(stream_source);
+    var reader = buffered_stream_source.reader();
+    var seekable_stream = buffered_stream_source.seekableStream();
 
     var all_id3v2_metadata: ?[]ID3v2Metadata = id3v2.read(allocator, reader, seekable_stream) catch |e| switch (e) {
         error.OutOfMemory => |err| return err,
