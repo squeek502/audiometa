@@ -76,31 +76,6 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
     return metadata;
 }
 
-fn embedReadAndDump(comptime path: []const u8) !void {
-    const data = @embedFile(path);
-    var stream = std.io.fixedBufferStream(data);
-    var metadata = try read(std.testing.allocator, stream.reader(), stream.seekableStream());
-    defer metadata.deinit();
-
-    metadata.map.dump();
-}
-
-test "mp3" {
-    try embedReadAndDump("(01) ... to reduce the choir to one soloist - Blind.mp3");
-}
-
-test "empty" {
-    var data = [_]u8{0} ** 128;
-    data[0] = 'T';
-    data[1] = 'A';
-    data[2] = 'G';
-    var stream = std.io.fixedBufferStream(data[0..]);
-    var metadata = try read(std.testing.allocator, stream.reader(), stream.seekableStream());
-    defer metadata.deinit();
-
-    metadata.map.dump();
-}
-
 pub const id3v1_genre_names = [_][]const u8{
     "Blues",
     "Classic Rock",

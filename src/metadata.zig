@@ -276,11 +276,7 @@ test "metadata map" {
     try std.testing.expect(metadata.contains("date"));
     try std.testing.expect(!metadata.contains("missing"));
 
-    std.debug.print("{s}\n", .{joined_date});
-
     try metadata.putOrReplaceFirst("date", "2019");
     const new_date = metadata.getFirst("date").?;
     try std.testing.expectEqualStrings("2019", new_date);
-
-    metadata.dump();
 }

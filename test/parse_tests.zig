@@ -115,6 +115,38 @@ const ExpectedMetadata = struct {
     map: []const MetadataEntry,
 };
 
+test "standard id3v1" {
+    try parseExpectedMetadata("data/id3v1.mp3", .{
+        .id3v1 = .{
+            .start_offset = 0x0,
+            .end_offset = 0x80,
+            .map = &[_]MetadataEntry{
+                .{ .name = "title", .value = "Blind" },
+                .{ .name = "artist", .value = "Acme" },
+                .{ .name = "album", .value = "... to reduce the choir to one" },
+                .{ .name = "track", .value = "1" },
+                .{ .name = "genre", .value = "Blues" },
+            },
+        },
+        .all_id3v2 = null,
+        .flac = null,
+    });
+}
+
+test "empty (all zeros) id3v1" {
+    try parseExpectedMetadata("data/id3v1_empty.mp3", .{
+        .id3v1 = .{
+            .start_offset = 0x0,
+            .end_offset = 0x80,
+            .map = &[_]MetadataEntry{
+                .{ .name = "genre", .value = "Blues" },
+            },
+        },
+        .all_id3v2 = null,
+        .flac = null,
+    });
+}
+
 test "standard id3v2.3 with UTF-16" {
     try parseExpectedMetadata("data/standard_id3v2.3.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
@@ -171,5 +203,59 @@ test "extended header id3v2.4 with crc" {
         },
         .id3v1 = null,
         .flac = null,
+    });
+}
+
+test "normal flac" {
+    try parseExpectedMetadata("data/normal.flac", .{
+        .all_id3v2 = null,
+        .id3v1 = null,
+        .flac = .{
+            .start_offset = 0x8,
+            .end_offset = 0x14C,
+            .map = &[_]MetadataEntry{
+                .{ .name = "ALBUM", .value = "Muga" },
+                .{ .name = "ALBUMARTIST", .value = "Muga" },
+                .{ .name = "ARTIST", .value = "Muga" },
+                .{ .name = "COMMENT", .value = "EAC V1.0 beta 2, Secure Mode, Test & Copy, AccurateRip, FLAC -8" },
+                .{ .name = "DATE", .value = "2002" },
+                .{ .name = "DISCNUMBER", .value = "1" },
+                .{ .name = "MEDIAFORMAT", .value = "CD" },
+                .{ .name = "PERFORMER", .value = "Muga" },
+                .{ .name = "TITLE", .value = "死前解放 (Unleash Before Death)" },
+                .{ .name = "DISCTOTAL", .value = "1" },
+                .{ .name = "TRACKTOTAL", .value = "11" },
+                .{ .name = "TRACKNUMBER", .value = "02" },
+            },
+        },
+    });
+}
+
+test "flac with duplicate date fields" {
+    try parseExpectedMetadata("data/duplicate_date.flac", .{
+        .all_id3v2 = null,
+        .id3v1 = null,
+        .flac = .{
+            .start_offset = 0x8,
+            .end_offset = 0x165,
+            .map = &[_]MetadataEntry{
+                .{ .name = "TITLE", .value = "The Echoes Waned" },
+                .{ .name = "TRACKTOTAL", .value = "6" },
+                .{ .name = "DISCTOTAL", .value = "1" },
+                .{ .name = "LENGTH", .value = "389" },
+                .{ .name = "ISRC", .value = "USA2Z1810265" },
+                .{ .name = "BARCODE", .value = "647603399720" },
+                .{ .name = "ITUNESADVISORY", .value = "0" },
+                .{ .name = "COPYRIGHT", .value = "(C) 2018 The Flenser" },
+                .{ .name = "Album", .value = "The Unraveling" },
+                .{ .name = "Artist", .value = "Ails" },
+                .{ .name = "Genre", .value = "Metal" },
+                .{ .name = "ALBUMARTIST", .value = "Ails" },
+                .{ .name = "DISCNUMBER", .value = "1" },
+                .{ .name = "DATE", .value = "2018" },
+                .{ .name = "DATE", .value = "2018-04-20" },
+                .{ .name = "TRACKNUMBER", .value = "1" },
+            },
+        },
     });
 }

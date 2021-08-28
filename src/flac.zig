@@ -70,32 +70,3 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
 
     return metadata;
 }
-
-fn embedReadAndDump(comptime path: []const u8) !void {
-    const data = @embedFile(path);
-    var stream = std.io.fixedBufferStream(data);
-    var metadata = try read(std.testing.allocator, stream.reader(), stream.seekableStream());
-    defer metadata.deinit();
-
-    metadata.map.dump();
-
-    var all_meta = @import("metadata.zig").AllMetadata{
-        .allocator = std.testing.allocator,
-        .flac = metadata,
-        .id3v1 = null,
-        .all_id3v2 = null,
-    };
-    var coalesced = try @import("ffmpeg_compat.zig").coalesceMetadata(std.testing.allocator, &all_meta);
-    defer coalesced.deinit();
-
-    std.debug.print("\ncoalesced:\n", .{});
-    coalesced.dump();
-}
-
-test "read flac" {
-    try embedReadAndDump("02 - 死前解放 (Unleash Before Death).flac");
-}
-
-test "duplicate date" {
-    try embedReadAndDump("01 The Echoes Waned.flac");
-}
