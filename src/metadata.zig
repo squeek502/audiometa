@@ -76,6 +76,23 @@ pub const AllMetadata = struct {
             flac_metadata.deinit();
         }
     }
+
+    pub fn dump(self: *const AllMetadata) void {
+        if (self.all_id3v2) |all_id3v2| {
+            for (all_id3v2) |*id3v2_meta| {
+                std.debug.print("# ID3v2 v2.{d} 0x{x}-0x{x}\n", .{ id3v2_meta.major_version, id3v2_meta.metadata.start_offset, id3v2_meta.metadata.end_offset });
+                id3v2_meta.metadata.map.dump();
+            }
+        }
+        if (self.id3v1) |*id3v1_meta| {
+            std.debug.print("# ID3v1 0x{x}-0x{x}\n", .{ id3v1_meta.start_offset, id3v1_meta.end_offset });
+            id3v1_meta.map.dump();
+        }
+        if (self.flac) |*flac_meta| {
+            std.debug.print("# FLAC 0x{x}-0x{x}\n", .{ flac_meta.start_offset, flac_meta.end_offset });
+            flac_meta.map.dump();
+        }
+    }
 };
 
 pub const ID3v2Metadata = struct {
@@ -235,7 +252,7 @@ pub const MetadataMap = struct {
         }
     }
 
-    pub fn dump(metadata: *MetadataMap) void {
+    pub fn dump(metadata: *const MetadataMap) void {
         for (metadata.entries.items) |entry| {
             std.debug.print("{s}={s}\n", .{ fmtUtf8SliceEscapeUpper(entry.name), fmtUtf8SliceEscapeUpper(entry.value) });
         }

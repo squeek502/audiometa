@@ -106,7 +106,7 @@ pub fn bufferedStreamSource(stream_source: *io.StreamSource) DefaultBufferedStre
     return DefaultBufferedStreamSource.init(stream_source);
 }
 
-test "io.BufferedStreamSource with file" {
+test "BufferedStreamSource with file" {
     const full_contents = "123456789" ** 2;
 
     var tmp = testing.tmpDir(.{});
