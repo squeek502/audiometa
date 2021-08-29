@@ -44,6 +44,14 @@ pub fn build(b: *std.build.Builder) void {
     test_step.dependOn(&tests.step);
     test_step.dependOn(&parse_tests.step);
 
+    var test_against_taglib = b.addTest("test/test_against_taglib.zig");
+    test_against_taglib.setBuildMode(mode);
+    test_against_taglib.setTarget(target);
+    test_against_taglib.setFilter(test_filter);
+    test_against_taglib.addPackagePath("audiometa", "src/audiometa.zig");
+    const test_against_taglib_step = b.step("test_against_taglib", "Test tag parsing against taglib");
+    test_against_taglib_step.dependOn(&test_against_taglib.step);
+
     var test_against_ffprobe = b.addTest("test/test_against_ffprobe.zig");
     test_against_ffprobe.setBuildMode(mode);
     test_against_ffprobe.setTarget(target);
