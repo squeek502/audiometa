@@ -1,13 +1,15 @@
 const std = @import("std");
-const id3 = @import("id3v2.zig");
-const flac = @import("flac.zig");
-const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
-const meta = @import("metadata.zig");
+const audiometa = @import("audiometa");
+const id3 = audiometa.id3v2;
+const flac = audiometa.flac;
+const fmtUtf8SliceEscapeUpper = audiometa.util.fmtUtf8SliceEscapeUpper;
+const meta = audiometa.metadata;
+const AllMetadata = meta.AllMetadata;
 const MetadataMap = meta.MetadataMap;
 const Metadata = meta.Metadata;
-const unsynch = @import("unsynch.zig");
-const ffmpeg_compat = @import("ffmpeg_compat.zig");
+const unsynch = audiometa.unsynch;
 const Allocator = std.mem.Allocator;
+const nulTerminated = audiometa.util.nulTerminated;
 
 const start_testing_at_prefix = "";
 
@@ -76,7 +78,7 @@ test "music folder" {
         var metadata = try meta.readAll(allocator, &stream_source);
         defer metadata.deinit();
 
-        var coalesced_metadata = try ffmpeg_compat.coalesceMetadata(allocator, &metadata);
+        var coalesced_metadata = try coalesceMetadata(allocator, &metadata);
         defer coalesced_metadata.deinit();
 
         try compareMetadata(allocator, &expected_metadata, &coalesced_metadata);
@@ -109,6 +111,174 @@ const ignored_fields = std.ComptimeStringMap(void, .{
     .{"oso"}, // this came from a COMM frame
 });
 
+pub fn coalesceMetadata(allocator: *Allocator, metadata: *AllMetadata) !MetadataMap {
+    var coalesced = meta.MetadataMap.init(allocator);
+    errdefer coalesced.deinit();
+
+    if (metadata.flac) |*flac_metadata| {
+        // since flac allows for duplicate fields, ffmpeg concats them with ;
+        // because ffmpeg has a 'no duplicate fields' rule
+        var names_it = flac_metadata.map.name_to_indexes.keyIterator();
+        while (names_it.next()) |raw_name| {
+            // vorbis metadata fields are case-insensitive, so convert to uppercase
+            // for the lookup
+            var upper_field = try std.ascii.allocUpperString(allocator, raw_name.*);
+            defer allocator.free(upper_field);
+
+            const name = flac_field_names.get(upper_field) orelse raw_name.*;
+            var joined_value = (try flac_metadata.map.getJoinedAlloc(allocator, raw_name.*, ";")).?;
+            defer allocator.free(joined_value);
+
+            try coalesced.put(name, joined_value);
+        }
+    }
+
+    if (coalesced.entries.items.len == 0) {
+        if (metadata.all_id3v2) |id3v2_metadata_list| {
+            // Here's an overview of how ffmpeg does things:
+            // 1. add all fields with their unconverted ID without overwriting
+            //    (this means that all duplicate fields are ignored)
+            // 2. once all tags are finished reading, convert IDs to their 'ffmpeg name',
+            //    allowing overwrites
+            // also it seems like empty values are exempt from overwriting things
+            // even if they would otherwise? I'm not sure where this is coming from, but
+            // it seems like that's the case from the output of ffprobe
+            //
+            // So, we need to basically do the same thing here using a temporary
+            // MetadataMap
+
+            var metadata_tmp = meta.MetadataMap.init(allocator);
+            defer metadata_tmp.deinit();
+
+            for (id3v2_metadata_list) |*id3v2_metadata_container| {
+                const id3v2_metadata = &id3v2_metadata_container.metadata.map;
+
+                for (id3v2_metadata.entries.items) |entry| {
+                    if (metadata_tmp.contains(entry.name)) continue;
+                    try metadata_tmp.put(entry.name, entry.value);
+                }
+            }
+
+            for (metadata_tmp.entries.items) |entry| {
+                const converted_name = convertIdToName(entry.name);
+                const name = converted_name orelse entry.name;
+                try coalesced.putOrReplaceFirst(name, entry.value);
+            }
+            try mergeDate(&coalesced);
+        }
+    }
+
+    if (coalesced.entries.items.len == 0) {
+        if (metadata.id3v1) |*id3v1_metadata| {
+            // just a clone
+            for (id3v1_metadata.map.entries.items) |entry| {
+                try coalesced.put(entry.name, entry.value);
+            }
+        }
+    }
+
+    return coalesced;
+}
+
+const date_format = "YYYY-MM-DD hh:mm";
+
+fn isValidDateComponent(maybe_date: ?[]const u8) bool {
+    if (maybe_date == null) return false;
+    const date = maybe_date.?;
+    if (date.len != 4) return false;
+    // only 0-9 allowed
+    for (date) |byte| switch (byte) {
+        '0'...'9' => {},
+        else => return false,
+    };
+    return true;
+}
+
+fn mergeDate(metadata: *MetadataMap) !void {
+    var date_buf: [date_format.len]u8 = undefined;
+    var date: []u8 = date_buf[0..0];
+
+    var year = metadata.getFirst("TYER") orelse metadata.getFirst("TYE");
+    if (!isValidDateComponent(year)) return;
+    date = date_buf[0..4];
+    std.mem.copy(u8, date, (year.?)[0..4]);
+
+    var maybe_daymonth = metadata.getFirst("TDAT") orelse metadata.getFirst("TDA");
+    if (isValidDateComponent(maybe_daymonth)) {
+        const daymonth = maybe_daymonth.?;
+        date = date_buf[0..10];
+        // TDAT is DDMM, we want -MM-DD
+        var day = daymonth[0..2];
+        var month = daymonth[2..4];
+        _ = try std.fmt.bufPrint(date[4..10], "-{s}-{s}", .{ month, day });
+
+        var maybe_time = metadata.getFirst("TIME") orelse metadata.getFirst("TIM");
+        if (isValidDateComponent(maybe_time)) {
+            const time = maybe_time.?;
+            date = date_buf[0..];
+            // TIME is HHMM
+            var hours = time[0..2];
+            var mins = time[2..4];
+            _ = try std.fmt.bufPrint(date[10..], " {s}:{s}", .{ hours, mins });
+        }
+    }
+
+    try metadata.putOrReplaceFirst("date", date);
+}
+
+const flac_field_names = std.ComptimeStringMap([]const u8, .{
+    .{ "ALBUMARTIST", "album_artist" },
+    .{ "TRACKNUMBER", "track" },
+    .{ "DISCNUMBER", "disc" },
+    .{ "DESCRIPTION", "comment" },
+});
+
+const id3v2_34_name_lookup = std.ComptimeStringMap([]const u8, .{
+    .{ "TALB", "album" },
+    .{ "TCOM", "composer" },
+    .{ "TCON", "genre" },
+    .{ "TCOP", "copyright" },
+    .{ "TENC", "encoded_by" },
+    .{ "TIT2", "title" },
+    .{ "TLAN", "language" },
+    .{ "TPE1", "artist" },
+    .{ "TPE2", "album_artist" },
+    .{ "TPE3", "performer" },
+    .{ "TPOS", "disc" },
+    .{ "TPUB", "publisher" },
+    .{ "TRCK", "track" },
+    .{ "TSSE", "encoder" },
+    .{ "USLT", "lyrics" },
+});
+
+const id3v2_4_name_lookup = std.ComptimeStringMap([]const u8, .{
+    .{ "TCMP", "compilation" },
+    .{ "TDRC", "date" },
+    .{ "TDRL", "date" },
+    .{ "TDEN", "creation_time" },
+    .{ "TSOA", "album-sort" },
+    .{ "TSOP", "artist-sort" },
+    .{ "TSOT", "title-sort" },
+});
+
+const id3v2_2_name_lookup = std.ComptimeStringMap([]const u8, .{
+    .{ "TAL", "album" },
+    .{ "TCO", "genre" },
+    .{ "TCP", "compilation" },
+    .{ "TT2", "title" },
+    .{ "TEN", "encoded_by" },
+    .{ "TP1", "artist" },
+    .{ "TP2", "album_artist" },
+    .{ "TP3", "performer" },
+    .{ "TRK", "track" },
+});
+
+fn convertIdToName(id: []const u8) ?[]const u8 {
+    // this is the order of precedence that ffmpeg does this
+    // it also does not care about the major version, it just converts things unconditionally
+    return id3v2_34_name_lookup.get(id) orelse id3v2_2_name_lookup.get(nulTerminated(id)) orelse id3v2_4_name_lookup.get(id);
+}
+
 fn compareMetadata(allocator: *Allocator, expected: *MetadataArray, actual: *MetadataMap) !void {
     for (expected.array.items) |field| {
         if (ignored_fields.get(field.name) != null) continue;
@@ -119,7 +289,7 @@ fn compareMetadata(allocator: *Allocator, expected: *MetadataArray, actual: *Met
 
         if (actual.contains(field.name)) {
             var num_values = actual.valueCount(field.name).?;
-            // ffmpeg_compat should coalesce all duplicates, since ffmpeg hates duplicates
+            // all duplicates should already be coalesced, since ffmpeg hates duplicates
             std.testing.expectEqual(num_values, 1) catch |e| {
                 std.debug.print("\nexpected:\n", .{});
                 for (expected.array.items) |_field| {
@@ -242,7 +412,7 @@ fn getFFProbeMetadata(allocator: *std.mem.Allocator, cwd: ?std.fs.Dir, filepath:
 
 test "ffprobe compare" {
     const allocator = std.testing.allocator;
-    const filepath = "/media/drive4/music/Il Male - Ritorno (2012)/Il Male - 01 - Preludio.mp3";
+    const filepath = "/media/drive4/music/Doomed Future Today/14 - Bombs (Version).mp3";
     var probed_metadata = getFFProbeMetadata(allocator, null, filepath) catch |e| switch (e) {
         error.NoMetadataFound => MetadataArray.init(allocator),
         else => return e,
@@ -256,7 +426,7 @@ test "ffprobe compare" {
     var metadata = try meta.readAll(allocator, &stream_source);
     defer metadata.deinit();
 
-    var coalesced_metadata = try ffmpeg_compat.coalesceMetadata(allocator, &metadata);
+    var coalesced_metadata = try coalesceMetadata(allocator, &metadata);
     defer coalesced_metadata.deinit();
 
     try compareMetadata(allocator, &probed_metadata, &coalesced_metadata);

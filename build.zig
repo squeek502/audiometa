@@ -44,6 +44,14 @@ pub fn build(b: *std.build.Builder) void {
     test_step.dependOn(&tests.step);
     test_step.dependOn(&parse_tests.step);
 
+    var test_against_ffprobe = b.addTest("test/test_against_ffprobe.zig");
+    test_against_ffprobe.setBuildMode(mode);
+    test_against_ffprobe.setTarget(target);
+    test_against_ffprobe.setFilter(test_filter);
+    test_against_ffprobe.addPackagePath("audiometa", "src/audiometa.zig");
+    const test_against_ffprobe_step = b.step("test_against_ffprobe", "Test tag parsing against ffprobe");
+    test_against_ffprobe_step.dependOn(&test_against_ffprobe.step);
+
     // Tools
 
     const extract_tag_exe = b.addExecutable("extract_tag", "tools/extract_tag.zig");
