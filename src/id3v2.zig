@@ -210,7 +210,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
         const is_user_defined = std.mem.eql(u8, id, user_defined_id);
 
         switch (encoding_byte) {
-            0 => { // ISO-8859-1 aka latin1
+            0, 3 => { // 0 = ISO-8859-1 aka latin1, 3 = UTF-8
                 var text_data = try allocator.alloc(u8, text_data_size);
                 defer allocator.free(text_data);
 
@@ -224,10 +224,15 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
                     text_data = decoded_text_data;
                 }
 
-                var utf8_text = try latin1.latin1ToUtf8Alloc(allocator, text_data);
-                defer allocator.free(utf8_text);
+                // If the text is latin1, then convert it to UTF-8
+                if (encoding_byte == 0) {
+                    var utf8_text = try latin1.latin1ToUtf8Alloc(allocator, text_data);
 
-                var it = std.mem.split(u8, utf8_text, "\x00");
+                    allocator.free(text_data);
+                    text_data = utf8_text;
+                }
+
+                var it = std.mem.split(u8, text_data, "\x00");
 
                 const text = it.next().?;
                 if (is_user_defined) {
@@ -296,30 +301,6 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
                     try metadata_map.put(utf8_text, utf8_value);
                 } else {
                     try metadata_map.put(id, utf8_text);
-                }
-            },
-            3 => { // UTF-8
-                var text_data = try allocator.alloc(u8, text_data_size);
-                defer allocator.free(text_data);
-
-                try unsynch_capable_reader.readNoEof(text_data);
-
-                if (frame_header.unsynchronised()) {
-                    var decoded_text_data = try allocator.alloc(u8, text_data_size);
-                    decoded_text_data = unsynch.decode(text_data, decoded_text_data);
-
-                    allocator.free(text_data);
-                    text_data = decoded_text_data;
-                }
-
-                var it = std.mem.split(u8, text_data, "\x00");
-
-                const text = it.next().?;
-                if (is_user_defined) {
-                    const value = it.next().?;
-                    try metadata_map.put(text, value);
-                } else {
-                    try metadata_map.put(id, text);
                 }
             },
             else => return error.InvalidTextEncodingByte,
