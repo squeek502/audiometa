@@ -80,7 +80,7 @@ pub const AllMetadata = struct {
     pub fn dump(self: *const AllMetadata) void {
         if (self.all_id3v2) |all_id3v2| {
             for (all_id3v2) |*id3v2_meta| {
-                std.debug.print("# ID3v2 v2.{d} 0x{x}-0x{x}\n", .{ id3v2_meta.major_version, id3v2_meta.metadata.start_offset, id3v2_meta.metadata.end_offset });
+                std.debug.print("# ID3v2 v2.{d} 0x{x}-0x{x}\n", .{ id3v2_meta.header.major_version, id3v2_meta.metadata.start_offset, id3v2_meta.metadata.end_offset });
                 id3v2_meta.metadata.map.dump();
             }
         }
@@ -97,12 +97,12 @@ pub const AllMetadata = struct {
 
 pub const ID3v2Metadata = struct {
     metadata: Metadata,
-    major_version: u8,
+    header: id3v2.ID3Header,
 
-    pub fn init(allocator: *Allocator, major_version: u8, start_offset: usize, end_offset: usize) ID3v2Metadata {
+    pub fn init(allocator: *Allocator, header: id3v2.ID3Header, start_offset: usize, end_offset: usize) ID3v2Metadata {
         return .{
             .metadata = Metadata.initWithOffsets(allocator, start_offset, end_offset),
-            .major_version = major_version,
+            .header = header,
         };
     }
 

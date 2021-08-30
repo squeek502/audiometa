@@ -141,7 +141,7 @@ pub fn skip(reader: anytype, seekable_stream: anytype) !void {
 }
 
 pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekable_stream: anytype, metadata_id3v2_container: *ID3v2Metadata, max_frame_size: usize, is_full_unsynch: bool) !void {
-    const id3_major_version = metadata_id3v2_container.major_version;
+    const id3_major_version = metadata_id3v2_container.header.major_version;
     var metadata = &metadata_id3v2_container.metadata;
     var metadata_map = &metadata.map;
 
@@ -340,7 +340,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
         };
 
         const end_offset = start_offset + ID3Header.len + id3_header.size;
-        try metadata_buf.append(ID3v2Metadata.init(allocator, id3_header.major_version, start_offset, end_offset));
+        try metadata_buf.append(ID3v2Metadata.init(allocator, id3_header, start_offset, end_offset));
         var metadata_id3v2_container = &metadata_buf.items[metadata_buf.items.len - 1];
         var metadata = &metadata_id3v2_container.metadata;
 

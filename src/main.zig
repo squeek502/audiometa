@@ -19,16 +19,16 @@ pub fn main() anyerror!void {
 
         if (metadata.all_id3v2) |id3v2_metadata_list| {
             for (id3v2_metadata_list) |*id3v2_metadata, i| {
-                std.debug.print("\nID3v2 Tag #{}\n============\n", .{i + 1});
+                std.debug.print("\nID3v2 Tag #{} (v2.{d})\n===================\n", .{ i + 1, id3v2_metadata.header.major_version });
                 id3v2_metadata.metadata.map.dump();
             }
         }
         if (metadata.flac) |*flac_metadata| {
-            std.debug.print("\nFLAC Metadata\n============\n", .{});
+            std.debug.print("\nFLAC Metadata\n=============\n", .{});
             flac_metadata.map.dump();
         }
         if (metadata.id3v1) |*id3v1_metadata| {
-            std.debug.print("\nID3v1 Tag\n============\n", .{});
+            std.debug.print("\nID3v1 Tag\n=========\n", .{});
             id3v1_metadata.map.dump();
         }
     }
