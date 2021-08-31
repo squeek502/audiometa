@@ -67,4 +67,12 @@ pub fn build(b: *std.build.Builder) void {
     extract_tag_exe.setTarget(target);
     extract_tag_exe.setBuildMode(mode);
     extract_tag_exe.install();
+
+    const extract_tag_run = extract_tag_exe.run();
+    extract_tag_run.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        extract_tag_run.addArgs(args);
+    }
+    const extract_tag_run_step = b.step("run_extract_tag", "Run the extract tag tool");
+    extract_tag_run_step.dependOn(&extract_tag_run.step);
 }
