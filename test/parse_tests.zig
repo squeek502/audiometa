@@ -147,8 +147,8 @@ test "empty (all zeros) id3v1" {
     });
 }
 
-test "standard id3v2.3 with UTF-16" {
-    try parseExpectedMetadata("data/standard_id3v2.3.mp3", .{
+test "id3v2.3 with UTF-16" {
+    try parseExpectedMetadata("data/id3v2.3.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
             .{
                 .major_version = 3,
@@ -185,8 +185,8 @@ test "standard id3v2.3 with UTF-16" {
     });
 }
 
-test "extended header id3v2.4 with crc" {
-    try parseExpectedMetadata("data/extended_header_v2.4_crc.mp3", .{
+test "id3v2.4 extended header with crc" {
+    try parseExpectedMetadata("data/id3v2.4_extended_header_crc.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
             .{
                 .major_version = 4,
@@ -207,7 +207,7 @@ test "extended header id3v2.4 with crc" {
 }
 
 test "normal flac" {
-    try parseExpectedMetadata("data/normal.flac", .{
+    try parseExpectedMetadata("data/flac.flac", .{
         .all_id3v2 = null,
         .id3v1 = null,
         .flac = .{
@@ -231,8 +231,8 @@ test "normal flac" {
     });
 }
 
-test "flac with duplicate date fields" {
-    try parseExpectedMetadata("data/duplicate_date.flac", .{
+test "flac with multiple date fields" {
+    try parseExpectedMetadata("data/flac_multiple_dates.flac", .{
         .all_id3v2 = null,
         .id3v1 = null,
         .flac = .{
