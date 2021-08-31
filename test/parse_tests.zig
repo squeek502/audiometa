@@ -259,3 +259,29 @@ test "flac with duplicate date fields" {
         },
     });
 }
+
+test "id3v2.4 unsynch text frames" {
+    try parseExpectedMetadata("data/id3v2.4_unsynch_text_frames.mp3", .{
+        .all_id3v2 = &[_]ExpectedID3v2Metadata{
+            .{
+                .major_version = 4,
+                .metadata = .{
+                    .start_offset = 0x0,
+                    .end_offset = 0x2170,
+                    .map = &[_]MetadataEntry{
+                        .{ .name = "TCON", .value = "Alternative" },
+                        .{ .name = "TDRC", .value = "1997" },
+                        .{ .name = "TRCK", .value = "1" },
+                        .{ .name = "TALB", .value = "Bruiser Queen" },
+                        .{ .name = "TPE1", .value = "Cake Like" },
+                        .{ .name = "TLEN", .value = "137000" },
+                        .{ .name = "TPUB", .value = "Vapor Records" },
+                        .{ .name = "TIT2", .value = "The New Girl" },
+                    },
+                },
+            },
+        },
+        .id3v1 = null,
+        .flac = null,
+    });
+}
