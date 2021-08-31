@@ -185,6 +185,32 @@ test "id3v2.3 with UTF-16" {
     });
 }
 
+test "id3v2.3 with UTF-16 big endian" {
+    try parseExpectedMetadata("data/id3v2.3_utf16_be.mp3", .{
+        .all_id3v2 = &[_]ExpectedID3v2Metadata{
+            .{
+                .major_version = 3,
+                .metadata = .{
+                    .start_offset = 0x0,
+                    .end_offset = 0x120,
+                    .map = &[_]MetadataEntry{
+                        .{ .name = "TSSE", .value = "LAME 32bits version 3.98 (http://www.mp3dev.org/)" },
+                        .{ .name = "TIT2", .value = "No Island of Dreams" },
+                        .{ .name = "TPE1", .value = "Conflict" },
+                        .{ .name = "TALB", .value = "It's Time To See Who's Who Now" },
+                        .{ .name = "TCON", .value = "Punk" },
+                        .{ .name = "TRCK", .value = "2" },
+                        .{ .name = "TYER", .value = "1985" },
+                        .{ .name = "TLEN", .value = "168000" },
+                    },
+                },
+            },
+        },
+        .id3v1 = null,
+        .flac = null,
+    });
+}
+
 test "id3v2.4 extended header with crc" {
     try parseExpectedMetadata("data/id3v2.4_extended_header_crc.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
