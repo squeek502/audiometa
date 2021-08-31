@@ -211,6 +211,64 @@ test "id3v2.3 with UTF-16 big endian" {
     });
 }
 
+test "id3v2.3 with user defined fields (TXXX)" {
+    try parseExpectedMetadata("data/id3v2.3_user_defined_fields.mp3", .{
+        .all_id3v2 = &[_]ExpectedID3v2Metadata{
+            .{
+                .major_version = 3,
+                .metadata = .{
+                    .start_offset = 0x0,
+                    .end_offset = 0x937,
+                    .map = &[_]MetadataEntry{
+                        .{ .name = "TLAN", .value = "eng" },
+                        .{ .name = "TRCK", .value = "1/14" },
+                        .{ .name = "TPE1", .value = "Acephalix" },
+                        .{ .name = "TIT2", .value = "Immanent" },
+                        .{ .name = "Rip date", .value = "2010-09-20" },
+                        .{ .name = "TYER", .value = "2010" },
+                        .{ .name = "TDAT", .value = "0000" },
+                        .{ .name = "Source", .value = "CD" },
+                        .{ .name = "TSSE", .value = "LAME 3.97 (-V2 --vbr-new)" },
+                        .{ .name = "Release type", .value = "Normal release" },
+                        .{ .name = "TCON", .value = "Hardcore" },
+                        .{ .name = "TPUB", .value = "Prank Records" },
+                        .{ .name = "Catalog #", .value = "Prank 110" },
+                        .{ .name = "TALB", .value = "Aporia" },
+                    },
+                },
+            },
+        },
+        .id3v1 = null,
+        .flac = null,
+    });
+}
+
+test "id3v2.3 with full unsynch tag" {
+    try parseExpectedMetadata("data/id3v2.3_unsynch_tag.mp3", .{
+        .all_id3v2 = &[_]ExpectedID3v2Metadata{
+            .{
+                .major_version = 3,
+                .metadata = .{
+                    .start_offset = 0x0,
+                    .end_offset = 0x11D3,
+                    .map = &[_]MetadataEntry{
+                        .{ .name = "TIT2", .value = "Intro" },
+                        .{ .name = "TPE1", .value = "Disgust" },
+                        .{ .name = "TALB", .value = "Brutality of War" },
+                        .{ .name = "TRCK", .value = "01/15" },
+                        .{ .name = "TLEN", .value = "68173" },
+                        .{ .name = "TCON", .value = "Other" },
+                        .{ .name = "TENC", .value = "Exact Audio Copy   (Secure mode)" },
+                        .{ .name = "TSSE", .value = "flac.exe -V -8 -T \"artist=Disgust\" -T \"title=Intro\" -T \"album=Brutality of War\" -T \"date=\" -T \"tracknumber=01\" -T \"genre=Other\"" },
+                    },
+                },
+            },
+        },
+        .id3v1 = null,
+        .flac = null,
+    });
+}
+
 test "id3v2.4 extended header with crc" {
     try parseExpectedMetadata("data/id3v2.4_extended_header_crc.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
