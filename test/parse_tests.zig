@@ -342,6 +342,37 @@ test "id3v2.2" {
     });
 }
 
+test "id3v2.4 utf16 frames with single u8 delimeters" {
+    try parseExpectedMetadata("data/id3v2.4_utf16_single_u8_delimeter.mp3", .{
+        .all_id3v2 = &[_]ExpectedID3v2Metadata{
+            .{
+                .major_version = 4,
+                .metadata = .{
+                    .start_offset = 0x0,
+                    .end_offset = 0x980,
+                    .map = &[_]MetadataEntry{
+                        .{ .name = "TDRC", .value = "2010" },
+                        .{ .name = "TRCK", .value = "1/9" },
+                        .{ .name = "TPOS", .value = "1/1" },
+                        .{ .name = "TCOM", .value = "Mar de Grises" },
+                        .{ .name = "PERFORMER", .value = "Mar de Grises" },
+                        .{ .name = "ALBUM ARTIST", .value = "Mar de Grises" },
+                        .{ .name = "TIT2", .value = "Starmaker" },
+                        .{ .name = "TPE1", .value = "Mar de Grises" },
+                        .{ .name = "TALB", .value = "Streams Inwards" },
+                        .{ .name = "TCOM", .value = "" },
+                        .{ .name = "TPE3", .value = "" },
+                        .{ .name = "TPE2", .value = "Mar de Grises" },
+                        .{ .name = "TCON", .value = "Death Metal, doom metal, atmospheric" },
+                    },
+                },
+            },
+        },
+        .id3v1 = null,
+        .flac = null,
+    });
+}
+
 test "id3v2.4 extended header with crc" {
     try parseExpectedMetadata("data/id3v2.4_extended_header_crc.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
