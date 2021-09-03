@@ -319,6 +319,29 @@ test "id3v2.3 with text frame with zero size" {
     });
 }
 
+test "id3v2.2" {
+    try parseExpectedMetadata("data/id3v2.2.mp3", .{
+        .all_id3v2 = &[_]ExpectedID3v2Metadata{
+            .{
+                .major_version = 2,
+                .metadata = .{
+                    .start_offset = 0x0,
+                    .end_offset = 0x86E,
+                    .map = &[_]MetadataEntry{
+                        .{ .name = "TT2", .value = "side a" },
+                        .{ .name = "TP1", .value = "a warm gun" },
+                        .{ .name = "TAL", .value = "escape" },
+                        .{ .name = "TRK", .value = "1" },
+                        .{ .name = "TEN", .value = "iTunes 8.0.1.11" },
+                    },
+                },
+            },
+        },
+        .id3v1 = null,
+        .flac = null,
+    });
+}
+
 test "id3v2.4 extended header with crc" {
     try parseExpectedMetadata("data/id3v2.4_extended_header_crc.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
