@@ -398,6 +398,31 @@ test "id3v2.3 zero size frame" {
     });
 }
 
+test "id3v2.4 non-synchsafe frame size" {
+    try parseExpectedMetadata("data/id3v2.4_non_synchsafe_frame_size.mp3", .{
+        .all_id3v2 = &[_]ExpectedID3v2Metadata{
+            .{
+                .major_version = 4,
+                .metadata = .{
+                    .start_offset = 0x0,
+                    .end_offset = 0xD6C,
+                    .map = &[_]MetadataEntry{
+                        .{ .name = "TLEN", .value = "302813" },
+                        .{ .name = "TIT2", .value = "Inevitable" },
+                        .{ .name = "TPE1", .value = "Mushroomhead" },
+                        .{ .name = "TALB", .value = "M3" },
+                        .{ .name = "TRCK", .value = "4" },
+                        .{ .name = "TDRC", .value = "1999" },
+                        .{ .name = "TCON", .value = "(12)" },
+                    },
+                },
+            },
+        },
+        .id3v1 = null,
+        .flac = null,
+    });
+}
+
 test "id3v2.4 extended header with crc" {
     try parseExpectedMetadata("data/id3v2.4_extended_header_crc.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
