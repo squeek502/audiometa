@@ -373,6 +373,31 @@ test "id3v2.4 utf16 frames with single u8 delimeters" {
     });
 }
 
+test "id3v2.3 zero size frame" {
+    try parseExpectedMetadata("data/id3v2.3_zero_size_frame.mp3", .{
+        .all_id3v2 = &[_]ExpectedID3v2Metadata{
+            .{
+                .major_version = 3,
+                .metadata = .{
+                    .start_offset = 0x0,
+                    .end_offset = 0x1000,
+                    .map = &[_]MetadataEntry{
+                        .{ .name = "TFLT", .value = "audio/mp3" },
+                        .{ .name = "TIT2", .value = "the global cannibal" },
+                        .{ .name = "TALB", .value = "Global Cannibal, The" },
+                        .{ .name = "TRCK", .value = "1" },
+                        .{ .name = "TYER", .value = "2004" },
+                        .{ .name = "TCON", .value = "Crust" },
+                        .{ .name = "TPE1", .value = "Behind Enemy Lines" },
+                    },
+                },
+            },
+        },
+        .id3v1 = null,
+        .flac = null,
+    });
+}
+
 test "id3v2.4 extended header with crc" {
     try parseExpectedMetadata("data/id3v2.4_extended_header_crc.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
