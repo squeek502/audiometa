@@ -295,6 +295,30 @@ test "id3v2.3 with id3v2.2 frame ids" {
     });
 }
 
+test "id3v2.3 with text frame with zero size" {
+    try parseExpectedMetadata("data/id3v2.3_text_frame_with_zero_size.mp3", .{
+        .all_id3v2 = &[_]ExpectedID3v2Metadata{
+            .{
+                .major_version = 3,
+                .metadata = .{
+                    .start_offset = 0x0,
+                    .end_offset = 0x183,
+                    .map = &[_]MetadataEntry{
+                        .{ .name = "TCON", .value = "(129)Hardcore" },
+                        .{ .name = "TRCK", .value = "1" },
+                        .{ .name = "TYER", .value = "2004" },
+                        .{ .name = "TALB", .value = "Italian Girls (The Best In The World)" },
+                        .{ .name = "TPE1", .value = "A Taste For Murder" },
+                        .{ .name = "TIT2", .value = "Rosario" },
+                    },
+                },
+            },
+        },
+        .id3v1 = null,
+        .flac = null,
+    });
+}
+
 test "id3v2.4 extended header with crc" {
     try parseExpectedMetadata("data/id3v2.4_extended_header_crc.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
