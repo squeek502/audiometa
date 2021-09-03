@@ -269,6 +269,32 @@ test "id3v2.3 with full unsynch tag" {
     });
 }
 
+test "id3v2.3 with id3v2.2 frame ids" {
+    try parseExpectedMetadata("data/id3v2.3_with_id3v2.2_frame_ids.mp3", .{
+        .all_id3v2 = &[_]ExpectedID3v2Metadata{
+            .{
+                .major_version = 3,
+                .metadata = .{
+                    .start_offset = 0x0,
+                    .end_offset = 0x1154,
+                    .map = &[_]MetadataEntry{
+                        .{ .name = "TENC", .value = "iTunes v7.6.1" },
+                        .{ .name = "TIT2", .value = "Religion Is Fear" },
+                        .{ .name = "TYER", .value = "2008" },
+                        .{ .name = "TCON", .value = "Grindcore" },
+                        .{ .name = "TALB", .value = "Trap Them & Extreme Noise Terror Split 7\"EP" },
+                        .{ .name = "TRCK", .value = "1" },
+                        .{ .name = "TPE1", .value = "Extreme Noise Terror" },
+                        .{ .name = "TCP", .value = "1" },
+                    },
+                },
+            },
+        },
+        .id3v1 = null,
+        .flac = null,
+    });
+}
+
 test "id3v2.4 extended header with crc" {
     try parseExpectedMetadata("data/id3v2.4_extended_header_crc.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
