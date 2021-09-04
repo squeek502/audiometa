@@ -147,6 +147,24 @@ test "empty (all zeros) id3v1" {
     });
 }
 
+test "id3v1 with non-ASCII chars (latin1)" {
+    try parseExpectedMetadata("data/id3v1_latin1_chars.mp3", .{
+        .id3v1 = .{
+            .start_offset = 0x0,
+            .end_offset = 0x80,
+            .map = &[_]MetadataEntry{
+                .{ .name = "title", .value = "Introducción" },
+                .{ .name = "artist", .value = "3rdage Attack" },
+                .{ .name = "album", .value = "3rdage Attack" },
+                .{ .name = "date", .value = "2007" },
+                .{ .name = "track", .value = "1" },
+            },
+        },
+        .all_id3v2 = null,
+        .flac = null,
+    });
+}
+
 test "id3v2.3 with UTF-16" {
     try parseExpectedMetadata("data/id3v2.3.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
