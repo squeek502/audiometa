@@ -302,7 +302,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
                 var text = it.next().?;
                 if (has_bom) {
                     // check for byte order mark and skip it
-                    if (text[0] != 0xFEFF) {
+                    if (text.len == 0 or text[0] != 0xFEFF) {
                         return error.InvalidUTF16BOM;
                     }
                     text = text[1..];
@@ -314,7 +314,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
                     var value = it.next().?;
                     if (has_bom) {
                         // check for byte order mark and skip it
-                        if (value[0] != 0xFEFF) {
+                        if (value.len == 0 or value[0] != 0xFEFF) {
                             return error.InvalidUTF16BOM;
                         }
                         value = value[1..];
