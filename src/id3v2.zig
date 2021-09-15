@@ -278,13 +278,14 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
                     text_data = decoded_text_data;
                 }
 
+                var sanitized_text_data = text_data;
                 if (text_data.len % 2 != 0) {
                     // there could be an erroneous trailing single char nul-terminator
                     // or garbage. if so, just ignore it and pretend it doesn't exist
-                    text_data = text_data[0..(text_data.len - 1)];
+                    sanitized_text_data = text_data[0..(text_data.len - 1)];
                 }
 
-                var utf16_text = @alignCast(u16_align, std.mem.bytesAsSlice(u16, text_data));
+                var utf16_text = @alignCast(u16_align, std.mem.bytesAsSlice(u16, sanitized_text_data));
 
                 // if this is big endian, then swap everything to little endian up front
                 // TODO: I feel like this probably won't handle big endian native architectures correctly
