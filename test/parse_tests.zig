@@ -541,3 +541,37 @@ test "id3v2.4 unsynch text frames" {
         .flac = null,
     });
 }
+
+test "id3v2.3 malformed TXXX" {
+    try parseExpectedMetadata("data/id3v2.3_malformed_txxx.mp3", .{
+        .all_id3v2 = &[_]ExpectedID3v2Metadata{
+            .{
+                .major_version = 3,
+                .metadata = .{
+                    .start_offset = 0x0,
+                    .end_offset = 0x43,
+                    .map = &[_]MetadataEntry{},
+                },
+            },
+        },
+        .id3v1 = null,
+        .flac = null,
+    });
+}
+
+test "id3v2.4 malformed TXXX" {
+    try parseExpectedMetadata("data/id3v2.4_malformed_txxx.mp3", .{
+        .all_id3v2 = &[_]ExpectedID3v2Metadata{
+            .{
+                .major_version = 4,
+                .metadata = .{
+                    .start_offset = 0x0,
+                    .end_offset = 0x3B,
+                    .map = &[_]MetadataEntry{},
+                },
+            },
+        },
+        .id3v1 = null,
+        .flac = null,
+    });
+}

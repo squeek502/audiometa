@@ -256,7 +256,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
 
                 const text = it.next().?;
                 if (is_user_defined) {
-                    const value = it.next().?;
+                    const value = it.next() orelse return error.InvalidUserDefinedTextFrame;
                     try metadata_map.put(text, value);
                 } else {
                     try metadata_map.put(id, text);
@@ -315,7 +315,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
                 defer allocator.free(utf8_text);
 
                 if (is_user_defined) {
-                    var value = it.next().?;
+                    var value = it.next() orelse return error.InvalidUserDefinedTextFrame;
                     if (has_bom) {
                         // check for byte order mark and skip it
                         if (value.len == 0 or value[0] != 0xFEFF) {
@@ -454,6 +454,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
                 error.InvalidUTF16BOM,
                 error.ZeroSizeTextData,
                 error.UnexpectedTextDataEnd,
+                error.InvalidUserDefinedTextFrame,
                 => {
                     // This is a bit weird, but go back to the start of the frame and then
                     // skip forward. This ensures that we correctly skip the frame in all
