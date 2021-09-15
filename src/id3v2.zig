@@ -201,12 +201,18 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
         var text_data_size = frame_header.size;
 
         if (frame_header.has_data_length_indicator()) {
+            if (text_data_size < 4) {
+                return error.UnexpectedTextDataEnd;
+            }
             //const frame_data_length_raw = try unsynch_capable_reader.readIntBig(u32);
             //const frame_data_length = synchsafe.decode(u32, frame_data_length_raw);
             try unsynch_capable_reader.skipBytes(4, .{});
             text_data_size -= 4;
         }
 
+        if (text_data_size == 0) {
+            return error.UnexpectedTextDataEnd;
+        }
         const encoding_byte = try unsynch_capable_reader.readByte();
         text_data_size -= 1;
 
@@ -436,6 +442,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
                 error.ZeroSizeFrame,
                 error.InvalidUTF16BOM,
                 error.ZeroSizeTextData,
+                error.UnexpectedTextDataEnd,
                 => {
                     // This is a bit weird, but go back to the start of the frame and then
                     // skip forward. This ensures that we correctly skip the frame in all
