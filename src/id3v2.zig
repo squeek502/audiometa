@@ -130,6 +130,22 @@ pub const FrameHeader = struct {
     pub fn has_data_length_indicator(self: *const FrameHeader) bool {
         return self.format_flags & @as(u8, 1) != 0;
     }
+
+    pub fn skipData(self: FrameHeader, unsynch_capable_reader: anytype, seekable_stream: anytype) !void {
+        // TODO: this Reader.context access seems pretty gross
+        if (unsynch_capable_reader.context.unsynch) {
+            // if the tag is full unsynch, then we need to skip while reading
+            try unsynch_capable_reader.skipBytes(self.size, .{});
+        } else {
+            // if the tag is not full unsynch, then we can just skip without reading
+            try seekable_stream.seekBy(self.size);
+        }
+    }
+
+    pub fn skipDataFromPos(self: FrameHeader, start_pos: usize, unsynch_capable_reader: anytype, seekable_stream: anytype) !void {
+        try seekable_stream.seekTo(start_pos);
+        return self.skipData(unsynch_capable_reader, seekable_stream);
+    }
 };
 
 pub fn skip(reader: anytype, seekable_stream: anytype) !void {
@@ -140,23 +156,19 @@ pub fn skip(reader: anytype, seekable_stream: anytype) !void {
     return seekable_stream.seekBy(header.size);
 }
 
-pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekable_stream: anytype, metadata_id3v2_container: *ID3v2Metadata, max_frame_size: usize, is_full_unsynch: bool) !void {
+/// On error, seekable_stream cursor position will be wherever the error happened, it is
+/// up to the caller to determine what to do from there
+pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekable_stream: anytype, metadata_id3v2_container: *ID3v2Metadata, frame_header: *FrameHeader, remaining_tag_size: usize) !void {
     const id3_major_version = metadata_id3v2_container.header.major_version;
     var metadata = &metadata_id3v2_container.metadata;
     var metadata_map = &metadata.map;
 
-    var frame_header = try FrameHeader.read(unsynch_capable_reader, id3_major_version);
-
-    // validate frame_header and bail out if its too crazy
-    frame_header.validate(id3_major_version, max_frame_size) catch {
-        try seekable_stream.seekTo(metadata.end_offset);
-        return error.InvalidFrameHeader;
-    };
-
     // this is technically not valid AFAIK but ffmpeg seems to accept
     // it without failing the parse, so just skip it
     // TODO: zero sized T-type frames? would ffprobe output that?
-    if (frame_header.size == 0) return;
+    if (frame_header.size == 0) {
+        return error.ZeroSizeFrame;
+    }
 
     // sometimes v2.4 encoders don't use synchsafe integers for their frame sizes
     // so we need to double check
@@ -169,14 +181,14 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
             seekable_stream.seekTo(after_frame_synchsafe) catch break :synchsafe_check;
             const next_frame_header_synchsafe = FrameHeader.read(unsynch_capable_reader, id3_major_version) catch break :synchsafe_check;
 
-            if (next_frame_header_synchsafe.validate(id3_major_version, max_frame_size)) {
+            if (next_frame_header_synchsafe.validate(id3_major_version, remaining_tag_size)) {
                 break :synchsafe_check;
             } else |_| {}
 
             seekable_stream.seekTo(after_frame_u32) catch break :synchsafe_check;
             const next_frame_header_u32 = FrameHeader.read(unsynch_capable_reader, id3_major_version) catch break :synchsafe_check;
 
-            next_frame_header_u32.validate(id3_major_version, max_frame_size) catch break :synchsafe_check;
+            next_frame_header_u32.validate(id3_major_version, remaining_tag_size) catch break :synchsafe_check;
 
             // if we got here then this is the better size
             frame_header.size = frame_header.raw_size;
@@ -198,7 +210,9 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
         const encoding_byte = try unsynch_capable_reader.readByte();
         text_data_size -= 1;
 
-        if (text_data_size == 0) return;
+        if (text_data_size == 0) {
+            return error.ZeroSizeTextData;
+        }
 
         // Treat as NUL terminated because some v2.3 tags will use 3 length IDs
         // with a NUL as the 4th char, and we should handle those as NUL terminated
@@ -282,7 +296,9 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
                 var text = it.next().?;
                 if (has_bom) {
                     // check for byte order mark and skip it
-                    assert(text[0] == 0xFEFF);
+                    if (text[0] != 0xFEFF) {
+                        return error.InvalidUTF16BOM;
+                    }
                     text = text[1..];
                 }
                 var utf8_text = try std.unicode.utf16leToUtf8Alloc(allocator, text);
@@ -292,7 +308,9 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
                     var value = it.next().?;
                     if (has_bom) {
                         // check for byte order mark and skip it
-                        assert(value[0] == 0xFEFF);
+                        if (value[0] != 0xFEFF) {
+                            return error.InvalidUTF16BOM;
+                        }
                         value = value[1..];
                     }
                     var utf8_value = try std.unicode.utf16leToUtf8Alloc(allocator, value);
@@ -306,12 +324,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
             else => return error.InvalidTextEncodingByte,
         }
     } else {
-        if (is_full_unsynch) {
-            try unsynch_capable_reader.skipBytes(frame_header.size, .{});
-        } else {
-            // if the tag is not full unsynch, then we can just skip without reading
-            try seekable_stream.seekBy(frame_header.size);
-        }
+        try frame_header.skipData(unsynch_capable_reader, seekable_stream);
     }
 }
 
@@ -404,9 +417,32 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
         // excluding the header), we can stop reading once there's not enough space left for
         // a valid tag to be read.
         const tag_end_with_enough_space_for_valid_frame: usize = metadata.end_offset - frame_header_len;
-        while ((try seekable_stream.getPos()) < tag_end_with_enough_space_for_valid_frame) {
-            readFrame(allocator, unsynch_capable_reader, seekable_stream, metadata_id3v2_container, id3_header.size, unsynch_reader.unsynch) catch |e| switch (e) {
-                error.InvalidFrameHeader => break,
+        var cur_pos = try seekable_stream.getPos();
+        while (cur_pos < tag_end_with_enough_space_for_valid_frame) : (cur_pos = try seekable_stream.getPos()) {
+            var frame_header = try FrameHeader.read(unsynch_capable_reader, id3_header.major_version);
+
+            var frame_data_start_pos = try seekable_stream.getPos();
+            var remaining_tag_size = metadata.end_offset - frame_data_start_pos;
+
+            // validate frame_header and bail out if its too crazy
+            frame_header.validate(id3_header.major_version, remaining_tag_size) catch {
+                try seekable_stream.seekTo(metadata.end_offset);
+                break;
+            };
+
+            readFrame(allocator, unsynch_capable_reader, seekable_stream, metadata_id3v2_container, &frame_header, remaining_tag_size) catch |e| switch (e) {
+                // Errors within the frame can be recovered from by skipping the frame
+                error.InvalidTextEncodingByte,
+                error.ZeroSizeFrame,
+                error.InvalidUTF16BOM,
+                error.ZeroSizeTextData,
+                => {
+                    // This is a bit weird, but go back to the start of the frame and then
+                    // skip forward. This ensures that we correctly skip the frame in all
+                    // circumstances (partially read, full unsynch, etc)
+                    try frame_header.skipDataFromPos(frame_data_start_pos, unsynch_capable_reader, seekable_stream);
+                    continue;
+                },
                 else => |err| return err,
             };
         }
