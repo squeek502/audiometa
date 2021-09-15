@@ -231,24 +231,24 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
 
         switch (encoding_byte) {
             0, 3 => { // 0 = ISO-8859-1 aka latin1, 3 = UTF-8
-                var text_data = try allocator.alloc(u8, text_data_size);
-                defer allocator.free(text_data);
+                var raw_text_data = try allocator.alloc(u8, text_data_size);
+                defer allocator.free(raw_text_data);
 
-                try unsynch_capable_reader.readNoEof(text_data);
+                try unsynch_capable_reader.readNoEof(raw_text_data);
 
+                var text_data = raw_text_data;
                 if (frame_header.unsynchronised()) {
-                    var decoded_text_data = try allocator.alloc(u8, text_data_size);
-                    decoded_text_data = unsynch.decode(text_data, decoded_text_data);
-
-                    allocator.free(text_data);
-                    text_data = decoded_text_data;
+                    text_data = unsynch.decodeInPlace(text_data);
                 }
 
                 // If the text is latin1, then convert it to UTF-8
                 if (encoding_byte == 0) {
                     var utf8_text = try latin1.latin1ToUtf8Alloc(allocator, text_data);
 
-                    allocator.free(text_data);
+                    // the utf8 data is now the raw_text_data
+                    allocator.free(raw_text_data);
+                    raw_text_data = utf8_text;
+
                     text_data = utf8_text;
                 }
 
@@ -265,27 +265,25 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
             1, 2 => { // UTF-16 (1 = with BOM, 2 = without)
                 const has_bom = encoding_byte == 1;
                 const u16_align = @alignOf(u16);
-                var text_data = try allocator.allocWithOptions(u8, text_data_size, u16_align, null);
-                defer allocator.free(text_data);
+                var raw_text_data = try allocator.allocWithOptions(u8, text_data_size, u16_align, null);
+                defer allocator.free(raw_text_data);
 
-                try unsynch_capable_reader.readNoEof(text_data);
+                try unsynch_capable_reader.readNoEof(raw_text_data);
 
+                var text_data = raw_text_data;
                 if (frame_header.unsynchronised()) {
-                    var decoded_text_data = try allocator.allocWithOptions(u8, text_data_size, u16_align, null);
-                    decoded_text_data = @alignCast(u16_align, unsynch.decode(text_data, decoded_text_data));
-
-                    allocator.free(text_data);
-                    text_data = decoded_text_data;
+                    // This alignCast is safe since unsynch decoding is guaranteed to
+                    // never change the beginning character of the slice
+                    text_data = @alignCast(u16_align, unsynch.decodeInPlace(text_data));
                 }
 
-                var sanitized_text_data = text_data;
                 if (text_data.len % 2 != 0) {
                     // there could be an erroneous trailing single char nul-terminator
                     // or garbage. if so, just ignore it and pretend it doesn't exist
-                    sanitized_text_data = text_data[0..(text_data.len - 1)];
+                    text_data.len -= 1;
                 }
 
-                var utf16_text = @alignCast(u16_align, std.mem.bytesAsSlice(u16, sanitized_text_data));
+                var utf16_text = @alignCast(u16_align, std.mem.bytesAsSlice(u16, text_data));
 
                 // if this is big endian, then swap everything to little endian up front
                 // TODO: I feel like this probably won't handle big endian native architectures correctly

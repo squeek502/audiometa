@@ -27,6 +27,10 @@ pub fn decode(in: []const u8, buf: []u8) []u8 {
     return buf[0..buf_i];
 }
 
+pub fn decodeInPlace(data: []u8) []u8 {
+    return decode(data, data);
+}
+
 pub fn UnsynchCapableReader(comptime ReaderType: type) type {
     return struct {
         child_reader: ReaderType,
@@ -79,6 +83,17 @@ test "unsynch decode" {
     var buf: [encoded.len]u8 = undefined;
 
     var decoded = decode(encoded, &buf);
+
+    try std.testing.expectEqual(decoded.len, 4);
+    try std.testing.expectEqualSlices(u8, "\xFF\x00\xFE\xFF", decoded);
+}
+
+test "unsynch decode in place" {
+    const encoded = "\xFF\x00\x00\xFE\xFF\x00";
+    var buf: [encoded.len]u8 = undefined;
+    std.mem.copy(u8, &buf, encoded);
+
+    var decoded = decodeInPlace(&buf);
 
     try std.testing.expectEqual(decoded.len, 4);
     try std.testing.expectEqualSlices(u8, "\xFF\x00\xFE\xFF", decoded);
