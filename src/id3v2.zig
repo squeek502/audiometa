@@ -289,6 +289,9 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
                 // if this is big endian, then swap everything to little endian up front
                 // TODO: I feel like this probably won't handle big endian native architectures correctly
                 if (has_bom) {
+                    if (utf16_text.len == 0) {
+                        return error.UnexpectedTextDataEnd;
+                    }
                     const bom = utf16_text[0];
                     if (bom == 0xFFFE) {
                         for (utf16_text) |c, i| {
