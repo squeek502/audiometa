@@ -215,10 +215,6 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
         const encoding_byte = try unsynch_capable_reader.readByte();
         text_data_size -= 1;
 
-        if (text_data_size == 0) {
-            return error.ZeroSizeTextData;
-        }
-
         // Treat as NUL terminated because some v2.3 tags will use 3 length IDs
         // with a NUL as the 4th char, and we should handle those as NUL terminated
         const id = nulTerminated(frame_header.idSlice(id3_major_version));
@@ -227,6 +223,17 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
             else => "TXXX",
         };
         const is_user_defined = std.mem.eql(u8, id, user_defined_id);
+
+        // we can handle this as a special case
+        if (text_data_size == 0) {
+            // if this is a user-defined frame, then there's no way it's valid,
+            // since there has to be a nul terminator between the name and the value
+            if (is_user_defined) {
+                return error.InvalidUserDefinedTextFrame;
+            }
+
+            return metadata_map.put(id, "");
+        }
 
         switch (encoding_byte) {
             0, 3 => { // 0 = ISO-8859-1 aka latin1, 3 = UTF-8
@@ -449,7 +456,6 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
                 error.InvalidTextEncodingByte,
                 error.ZeroSizeFrame,
                 error.InvalidUTF16BOM,
-                error.ZeroSizeTextData,
                 error.UnexpectedTextDataEnd,
                 error.InvalidUserDefinedTextFrame,
                 => {
