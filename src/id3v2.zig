@@ -407,26 +407,33 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
         var unsynch_reader = unsynch.unsynchCapableReader(should_read_unsynch, reader);
         var unsynch_capable_reader = unsynch_reader.reader();
 
+        // Slightly hacky solution for trailing garbage/padding bytes at the end of the tag. Instead of
+        // trying to read a tag that we know is invalid (since frame size has to be > 0
+        // excluding the header), we can stop reading once there's not enough space left for
+        // a valid tag to be read.
+        const tag_end_with_enough_space_for_valid_frame: usize = metadata.end_offset - FrameHeader.len(id3_header.major_version);
+
         // Skip past extended header if it exists
         if (id3_header.hasExtendedHeader()) {
             const extended_header_size: u32 = try unsynch_capable_reader.readIntBig(u32);
             // In ID3v2.4, extended header size is a synchsafe integer and includes the size bytes
             // in its reported size. In earlier versions, it is not synchsafe and excludes the size bytes.
-            if (id3_header.major_version >= 4) {
-                const synchsafe_extended_header_size = synchsafe.decode(u32, extended_header_size);
-                const remaining_extended_header_size = synchsafe_extended_header_size - 4;
-                try seekable_stream.seekBy(remaining_extended_header_size);
-            } else {
-                try seekable_stream.seekBy(extended_header_size);
+            const remaining_extended_header_size = remaining: {
+                if (id3_header.major_version >= 4) {
+                    const synchsafe_extended_header_size = synchsafe.decode(u32, extended_header_size);
+                    if (synchsafe_extended_header_size < 4) {
+                        return error.InvalidExtendedHeaderSize;
+                    }
+                    break :remaining synchsafe_extended_header_size - 4;
+                }
+                break :remaining extended_header_size;
+            };
+            if ((try seekable_stream.getPos()) + remaining_extended_header_size >= tag_end_with_enough_space_for_valid_frame) {
+                return error.InvalidExtendedHeaderSize;
             }
+            try seekable_stream.seekBy(remaining_extended_header_size);
         }
 
-        const frame_header_len = FrameHeader.len(id3_header.major_version);
-        // Slightly hacky solution for trailing garbage/padding bytes at the end of the tag. Instead of
-        // trying to read a tag that we know is invalid (since frame size has to be > 0
-        // excluding the header), we can stop reading once there's not enough space left for
-        // a valid tag to be read.
-        const tag_end_with_enough_space_for_valid_frame: usize = metadata.end_offset - frame_header_len;
         var cur_pos = try seekable_stream.getPos();
         while (cur_pos < tag_end_with_enough_space_for_valid_frame) : (cur_pos = try seekable_stream.getPos()) {
             var frame_header = try FrameHeader.read(unsynch_capable_reader, id3_header.major_version);
