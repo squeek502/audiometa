@@ -40,14 +40,14 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
             try reader.readNoEof(comments);
 
             const vendor_length = std.mem.readIntSliceLittle(u32, comments[0..4]);
-            if (vendor_length >= length - 4) {
+            if (vendor_length > length - 4) {
                 return error.VendorLengthTooLong;
             }
             const vendor_string_end = 4 + vendor_length;
             const vendor_string = comments[4..vendor_string_end];
             _ = vendor_string;
 
-            if (vendor_string_end >= length - 4) {
+            if (vendor_string_end > length - 4) {
                 return error.InvalidVendorLength;
             }
             const user_comment_list_length = std.mem.readIntSliceLittle(u32, comments[vendor_string_end .. vendor_string_end + 4]);
@@ -57,7 +57,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
             while (user_comment_offset < length_with_room_for_comment and user_comment_index < user_comment_list_length) : (user_comment_index += 1) {
                 const comment_length = std.mem.readIntSliceLittle(u32, comments[user_comment_offset .. user_comment_offset + 4]);
                 const comment_start_offset = user_comment_offset + 4;
-                if (comment_length >= length - comment_start_offset) {
+                if (comment_length > length - comment_start_offset) {
                     return error.CommentLengthTooLong;
                 }
                 const comment_start = comments[comment_start_offset..];

@@ -428,7 +428,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
                 }
                 break :remaining extended_header_size;
             };
-            if ((try seekable_stream.getPos()) + remaining_extended_header_size >= tag_end_with_enough_space_for_valid_frame) {
+            if ((try seekable_stream.getPos()) + remaining_extended_header_size > tag_end_with_enough_space_for_valid_frame) {
                 return error.InvalidExtendedHeaderSize;
             }
             try seekable_stream.seekBy(remaining_extended_header_size);
