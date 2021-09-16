@@ -279,7 +279,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
                 var text_data = raw_text_data;
                 if (frame_header.unsynchronised()) {
                     // This alignCast is safe since unsynch decoding is guaranteed to
-                    // never change the beginning character of the slice
+                    // never shift the beginning of the slice
                     text_data = @alignCast(u16_align, unsynch.decodeInPlace(text_data));
                 }
 
@@ -315,7 +315,10 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
                     }
                     text = text[1..];
                 }
-                var utf8_text = try std.unicode.utf16leToUtf8Alloc(allocator, text);
+                var utf8_text = std.unicode.utf16leToUtf8Alloc(allocator, text) catch |e| switch (e) {
+                    error.OutOfMemory => |err| return err,
+                    else => return error.InvalidUTF16Data,
+                };
                 defer allocator.free(utf8_text);
 
                 if (is_user_defined) {
@@ -327,7 +330,10 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
                         }
                         value = value[1..];
                     }
-                    var utf8_value = try std.unicode.utf16leToUtf8Alloc(allocator, value);
+                    var utf8_value = std.unicode.utf16leToUtf8Alloc(allocator, value) catch |e| switch (e) {
+                        error.OutOfMemory => |err| return err,
+                        else => return error.InvalidUTF16Data,
+                    };
                     defer allocator.free(utf8_value);
 
                     try metadata_map.put(utf8_text, utf8_value);
@@ -458,6 +464,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
                 error.InvalidUTF16BOM,
                 error.UnexpectedTextDataEnd,
                 error.InvalidUserDefinedTextFrame,
+                error.InvalidUTF16Data,
                 => {
                     // This is a bit weird, but go back to the start of the frame and then
                     // skip forward. This ensures that we correctly skip the frame in all
