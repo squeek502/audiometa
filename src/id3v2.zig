@@ -131,9 +131,8 @@ pub const FrameHeader = struct {
         return self.format_flags & @as(u8, 1) != 0;
     }
 
-    pub fn skipData(self: FrameHeader, unsynch_capable_reader: anytype, seekable_stream: anytype) !void {
-        // TODO: this Reader.context access seems pretty gross
-        if (unsynch_capable_reader.context.unsynch) {
+    pub fn skipData(self: FrameHeader, unsynch_capable_reader: anytype, seekable_stream: anytype, full_unsynch: bool) !void {
+        if (full_unsynch) {
             // if the tag is full unsynch, then we need to skip while reading
             try unsynch_capable_reader.skipBytes(self.size, .{});
         } else {
@@ -142,9 +141,9 @@ pub const FrameHeader = struct {
         }
     }
 
-    pub fn skipDataFromPos(self: FrameHeader, start_pos: usize, unsynch_capable_reader: anytype, seekable_stream: anytype) !void {
+    pub fn skipDataFromPos(self: FrameHeader, start_pos: usize, unsynch_capable_reader: anytype, seekable_stream: anytype, full_unsynch: bool) !void {
         try seekable_stream.seekTo(start_pos);
-        return self.skipData(unsynch_capable_reader, seekable_stream);
+        return self.skipData(unsynch_capable_reader, seekable_stream, full_unsynch);
     }
 };
 
@@ -158,7 +157,7 @@ pub fn skip(reader: anytype, seekable_stream: anytype) !void {
 
 /// On error, seekable_stream cursor position will be wherever the error happened, it is
 /// up to the caller to determine what to do from there
-pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekable_stream: anytype, metadata_id3v2_container: *ID3v2Metadata, frame_header: *FrameHeader, remaining_tag_size: usize) !void {
+pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekable_stream: anytype, metadata_id3v2_container: *ID3v2Metadata, frame_header: *FrameHeader, remaining_tag_size: usize, full_unsynch: bool) !void {
     const id3_major_version = metadata_id3v2_container.header.major_version;
     var metadata = &metadata_id3v2_container.metadata;
     var metadata_map = &metadata.map;
@@ -332,7 +331,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
             else => return error.InvalidTextEncodingByte,
         }
     } else {
-        try frame_header.skipData(unsynch_capable_reader, seekable_stream);
+        try frame_header.skipData(unsynch_capable_reader, seekable_stream, full_unsynch);
     }
 }
 
@@ -445,7 +444,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
                 break;
             };
 
-            readFrame(allocator, unsynch_capable_reader, seekable_stream, metadata_id3v2_container, &frame_header, remaining_tag_size) catch |e| switch (e) {
+            readFrame(allocator, unsynch_capable_reader, seekable_stream, metadata_id3v2_container, &frame_header, remaining_tag_size, unsynch_reader.unsynch) catch |e| switch (e) {
                 // Errors within the frame can be recovered from by skipping the frame
                 error.InvalidTextEncodingByte,
                 error.ZeroSizeFrame,
@@ -457,7 +456,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
                     // This is a bit weird, but go back to the start of the frame and then
                     // skip forward. This ensures that we correctly skip the frame in all
                     // circumstances (partially read, full unsynch, etc)
-                    try frame_header.skipDataFromPos(frame_data_start_pos, unsynch_capable_reader, seekable_stream);
+                    try frame_header.skipDataFromPos(frame_data_start_pos, unsynch_capable_reader, seekable_stream, unsynch_reader.unsynch);
                     continue;
                 },
                 else => |err| return err,

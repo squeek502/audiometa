@@ -269,7 +269,7 @@ fn compareMetadata(allocator: *Allocator, all_expected: *AllMetadata, all_actual
             var expected = &all_id3v2_expected[0];
             var actual = &all_id3v2_actual[0];
 
-            return compareMetadataMapID3v2(allocator, &expected.metadata.map, &actual.metadata.map, expected.major_version);
+            return compareMetadataMapID3v2(allocator, &expected.metadata.map, &actual.metadata.map, expected.header.major_version);
         } else {
             std.debug.print("\nexpected\n==================\n", .{});
             all_id3v2_expected[0].metadata.map.dump();
@@ -336,13 +336,19 @@ fn getTagLibMetadata(allocator: *std.mem.Allocator, cwd: ?std.fs.Dir, filepath: 
             id3v2_slice = try allocator.alloc(ID3v2Metadata, 1);
             errdefer allocator.free(id3v2_slice.?);
 
-            (id3v2_slice.?)[0] = ID3v2Metadata.init(allocator, major_version, 0, 0);
+            (id3v2_slice.?)[0] = ID3v2Metadata.init(allocator, id3.ID3Header{
+                .major_version = major_version,
+                .revision_num = 0,
+                .flags = 0,
+                .size = 0,
+            }, 0, 0);
             var id3v2_metadata = &(id3v2_slice.?)[0];
             errdefer id3v2_metadata.deinit();
 
             var frame_i: usize = 0;
             while (frame_i < num_frames) : (frame_i += 1) {
-                try id3.readFrame(allocator, reader, seekable_stream, id3v2_metadata, frames_data.len, false);
+                var frame_header = try id3.FrameHeader.read(reader, major_version);
+                try id3.readFrame(allocator, reader, seekable_stream, id3v2_metadata, &frame_header, result.stdout.len, false);
             }
         }
     }
