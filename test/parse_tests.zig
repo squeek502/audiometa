@@ -575,3 +575,23 @@ test "id3v2.4 malformed TXXX" {
         .flac = null,
     });
 }
+
+test "id3v2.3 unsynch tag edge case" {
+    // Found via fuzzing. Has a full unsynch tag that has an end frame header with
+    // unsynch bytes that extends to the end of the tag. This can trigger an
+    // usize underflow if it's not protected against properly.
+    try parseExpectedMetadata("data/id3v2.3_unsynch_tag_edge_case.mp3", .{
+        .all_id3v2 = &[_]ExpectedID3v2Metadata{
+            .{
+                .major_version = 3,
+                .metadata = .{
+                    .start_offset = 0x0,
+                    .end_offset = 0x43,
+                    .map = &[_]MetadataEntry{},
+                },
+            },
+        },
+        .id3v1 = null,
+        .flac = null,
+    });
+}

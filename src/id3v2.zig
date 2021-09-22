@@ -449,7 +449,11 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
             var frame_header = try FrameHeader.read(unsynch_capable_reader, id3_header.major_version);
 
             var frame_data_start_pos = try seekable_stream.getPos();
-            var remaining_tag_size = metadata.end_offset - frame_data_start_pos;
+            // It's possible for full unsynch tags to advance the position more than
+            // the frame header length since the header itself is decoded while it's
+            // read. If we read such that `frame_data_start_pos > metadata.end_offset`,
+            // then treat it as 0 remaining size.
+            var remaining_tag_size = std.math.sub(usize, metadata.end_offset, frame_data_start_pos) catch 0;
 
             // validate frame_header and bail out if its too crazy
             frame_header.validate(id3_header.major_version, remaining_tag_size) catch {
