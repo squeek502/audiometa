@@ -134,7 +134,7 @@ pub fn coalesceMetadata(allocator: *Allocator, metadata: *AllMetadata) !Metadata
     }
 
     if (coalesced.entries.items.len == 0) {
-        if (metadata.all_id3v2) |id3v2_metadata_list| {
+        if (metadata.all_id3v2) |all_id3v2| {
             // Here's an overview of how ffmpeg does things:
             // 1. add all fields with their unconverted ID without overwriting
             //    (this means that all duplicate fields are ignored)
@@ -150,7 +150,7 @@ pub fn coalesceMetadata(allocator: *Allocator, metadata: *AllMetadata) !Metadata
             var metadata_tmp = meta.MetadataMap.init(allocator);
             defer metadata_tmp.deinit();
 
-            for (id3v2_metadata_list) |*id3v2_metadata_container| {
+            for (all_id3v2.tags) |*id3v2_metadata_container| {
                 const id3v2_metadata = &id3v2_metadata_container.metadata.map;
 
                 for (id3v2_metadata.entries.items) |entry| {

@@ -45,8 +45,8 @@ pub fn main() anyerror!void {
     defer buf.deinit();
 
     if (type_selection == null or type_selection.? == .id3v2) {
-        if (metadata.all_id3v2) |id3v2_metadata_list| {
-            for (id3v2_metadata_list) |*id3v2_metadata, i| {
+        if (metadata.all_id3v2) |all_id3v2| {
+            for (all_id3v2.tags) |*id3v2_metadata, i| {
                 if (index_selection != null and index_selection.? != i + 1) {
                     continue;
                 }

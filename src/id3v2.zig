@@ -5,6 +5,7 @@ const synchsafe = @import("synchsafe.zig");
 const latin1 = @import("latin1.zig");
 const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
 const unsynch = @import("unsynch.zig");
+const AllID3v2Metadata = @import("metadata.zig").AllID3v2Metadata;
 const ID3v2Metadata = @import("metadata.zig").ID3v2Metadata;
 const nulTerminated = @import("util.zig").nulTerminated;
 
@@ -348,7 +349,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
     }
 }
 
-pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![]ID3v2Metadata {
+pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !AllID3v2Metadata {
     var metadata_buf = std.ArrayList(ID3v2Metadata).init(allocator);
     errdefer {
         for (metadata_buf.items) |*meta| {
@@ -481,5 +482,8 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) ![
         }
     }
 
-    return metadata_buf.toOwnedSlice();
+    return AllID3v2Metadata{
+        .allocator = allocator,
+        .tags = metadata_buf.toOwnedSlice(),
+    };
 }

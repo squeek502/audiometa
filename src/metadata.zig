@@ -23,7 +23,7 @@ pub fn readAll(allocator: *Allocator, stream_source: *std.io.StreamSource) !AllM
     var reader = buffered_stream_source.reader();
     var seekable_stream = buffered_stream_source.seekableStream();
 
-    var all_id3v2_metadata: ?[]ID3v2Metadata = id3v2.read(allocator, reader, seekable_stream) catch |e| switch (e) {
+    var all_id3v2_metadata: ?AllID3v2Metadata = id3v2.read(allocator, reader, seekable_stream) catch |e| switch (e) {
         error.OutOfMemory => |err| return err,
         else => null,
     };
@@ -33,9 +33,9 @@ pub fn readAll(allocator: *Allocator, stream_source: *std.io.StreamSource) !AllM
     };
     // TODO: this isnt correct for id3v2 tags at the end of a file or when a SEEK frame is used
     var pos_after_last_id3v2: usize = blk: {
-        if (all_id3v2_metadata) |meta_slice| {
-            if (meta_slice.len > 0) {
-                var last_offset = meta_slice[meta_slice.len - 1].metadata.end_offset;
+        if (all_id3v2_metadata) |id3v2_metadata| {
+            if (id3v2_metadata.tags.len > 0) {
+                var last_offset = id3v2_metadata.tags[id3v2_metadata.tags.len - 1].metadata.end_offset;
                 break :blk last_offset;
             }
         }
@@ -57,17 +57,14 @@ pub fn readAll(allocator: *Allocator, stream_source: *std.io.StreamSource) !AllM
 
 pub const AllMetadata = struct {
     allocator: *Allocator,
-    all_id3v2: ?[]ID3v2Metadata,
+    all_id3v2: ?AllID3v2Metadata,
     id3v1: ?Metadata,
     // TODO rename? xiph? vorbis?
     flac: ?Metadata,
 
     pub fn deinit(self: *AllMetadata) void {
-        if (self.all_id3v2) |all_id3v2| {
-            for (all_id3v2) |*metadata| {
-                metadata.deinit();
-            }
-            self.allocator.free(all_id3v2);
+        if (self.all_id3v2) |*all_id3v2| {
+            all_id3v2.deinit();
         }
         if (self.id3v1) |*id3v1_metadata| {
             id3v1_metadata.deinit();
@@ -79,7 +76,7 @@ pub const AllMetadata = struct {
 
     pub fn dump(self: *const AllMetadata) void {
         if (self.all_id3v2) |all_id3v2| {
-            for (all_id3v2) |*id3v2_meta| {
+            for (all_id3v2.tags) |*id3v2_meta| {
                 std.debug.print("# ID3v2 v2.{d} 0x{x}-0x{x}\n", .{ id3v2_meta.header.major_version, id3v2_meta.metadata.start_offset, id3v2_meta.metadata.end_offset });
                 id3v2_meta.metadata.map.dump();
             }
@@ -92,6 +89,18 @@ pub const AllMetadata = struct {
             std.debug.print("# FLAC 0x{x}-0x{x}\n", .{ flac_meta.start_offset, flac_meta.end_offset });
             flac_meta.map.dump();
         }
+    }
+};
+
+pub const AllID3v2Metadata = struct {
+    allocator: *Allocator,
+    tags: []ID3v2Metadata,
+
+    pub fn deinit(self: *AllID3v2Metadata) void {
+        for (self.tags) |*tag| {
+            tag.deinit();
+        }
+        self.allocator.free(self.tags);
     }
 };
 

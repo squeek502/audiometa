@@ -23,10 +23,10 @@ fn parseExpectedMetadata(comptime path: []const u8, expected_meta: ExpectedAllMe
 fn compareAllMetadata(all_expected: *const ExpectedAllMetadata, all_actual: *const AllMetadata) !void {
     if (all_expected.all_id3v2) |all_id3v2_expected| {
         if (all_actual.all_id3v2) |all_id3v2_actual| {
-            try testing.expectEqual(all_id3v2_expected.len, all_id3v2_actual.len);
+            try testing.expectEqual(all_id3v2_expected.len, all_id3v2_actual.tags.len);
             for (all_id3v2_expected) |id3v2_expected, i| {
-                try testing.expectEqual(id3v2_expected.major_version, all_id3v2_actual[i].header.major_version);
-                try compareMetadata(&id3v2_expected.metadata, &all_id3v2_actual[i].metadata);
+                try testing.expectEqual(id3v2_expected.major_version, all_id3v2_actual.tags[i].header.major_version);
+                try compareMetadata(&id3v2_expected.metadata, &all_id3v2_actual.tags[i].metadata);
             }
         } else {
             return error.MissingID3v2;

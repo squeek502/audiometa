@@ -7,6 +7,7 @@ const meta = audiometa.metadata;
 const MetadataMap = meta.MetadataMap;
 const Metadata = meta.Metadata;
 const ID3v2Metadata = meta.ID3v2Metadata;
+const AllID3v2Metadata = meta.AllID3v2Metadata;
 const AllMetadata = meta.AllMetadata;
 const unsynch = audiometa.unsynch;
 const Allocator = std.mem.Allocator;
@@ -266,13 +267,13 @@ fn compareMetadata(allocator: *Allocator, all_expected: *AllMetadata, all_actual
     if (all_expected.all_id3v2) |all_id3v2_expected| {
         if (all_actual.all_id3v2) |all_id3v2_actual| {
             // taglib only parses the first id3 tag and skips the rest
-            var expected = &all_id3v2_expected[0];
-            var actual = &all_id3v2_actual[0];
+            var expected = &all_id3v2_expected.tags[0];
+            var actual = &all_id3v2_actual.tags[0];
 
             return compareMetadataMapID3v2(allocator, &expected.metadata.map, &actual.metadata.map, expected.header.major_version);
         } else {
             std.debug.print("\nexpected\n==================\n", .{});
-            all_id3v2_expected[0].metadata.map.dump();
+            all_id3v2_expected.tags[0].metadata.map.dump();
             std.debug.print("\n==================\n", .{});
             return error.MissingID3v2;
         }
@@ -303,7 +304,7 @@ fn getTagLibMetadata(allocator: *std.mem.Allocator, cwd: ?std.fs.Dir, filepath: 
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    var id3v2_slice: ?[]ID3v2Metadata = null;
+    var all_id3v2: ?AllID3v2Metadata = null;
 
     const maybe_metadata_start = std.mem.indexOf(u8, result.stdout, "ID3v2");
     if (maybe_metadata_start) |metadata_start| {
@@ -333,16 +334,16 @@ fn getTagLibMetadata(allocator: *std.mem.Allocator, cwd: ?std.fs.Dir, filepath: 
             var reader = stream_source.reader();
             var seekable_stream = stream_source.seekableStream();
 
-            id3v2_slice = try allocator.alloc(ID3v2Metadata, 1);
-            errdefer allocator.free(id3v2_slice.?);
+            var id3v2_slice = try allocator.alloc(ID3v2Metadata, 1);
+            errdefer allocator.free(id3v2_slice);
 
-            (id3v2_slice.?)[0] = ID3v2Metadata.init(allocator, id3.ID3Header{
+            id3v2_slice[0] = ID3v2Metadata.init(allocator, id3.ID3Header{
                 .major_version = major_version,
                 .revision_num = 0,
                 .flags = 0,
                 .size = 0,
             }, 0, 0);
-            var id3v2_metadata = &(id3v2_slice.?)[0];
+            var id3v2_metadata = &id3v2_slice[0];
             errdefer id3v2_metadata.deinit();
 
             var frame_i: usize = 0;
@@ -350,6 +351,8 @@ fn getTagLibMetadata(allocator: *std.mem.Allocator, cwd: ?std.fs.Dir, filepath: 
                 var frame_header = try id3.FrameHeader.read(reader, major_version);
                 try id3.readFrame(allocator, reader, seekable_stream, id3v2_metadata, &frame_header, result.stdout.len, false);
             }
+
+            all_id3v2 = AllID3v2Metadata{ .allocator = allocator, .tags = id3v2_slice };
         }
     }
 
@@ -388,7 +391,7 @@ fn getTagLibMetadata(allocator: *std.mem.Allocator, cwd: ?std.fs.Dir, filepath: 
     }
 
     return AllMetadata{
-        .all_id3v2 = id3v2_slice,
+        .all_id3v2 = all_id3v2,
         .flac = flac_metadata,
         .id3v1 = null,
         .allocator = allocator,

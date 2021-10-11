@@ -17,8 +17,8 @@ pub fn main() anyerror!void {
         var metadata = try audiometa.metadata.readAll(allocator, &stream_source);
         defer metadata.deinit();
 
-        if (metadata.all_id3v2) |id3v2_metadata_list| {
-            for (id3v2_metadata_list) |*id3v2_metadata, i| {
+        if (metadata.all_id3v2) |all_id3v2| {
+            for (all_id3v2.tags) |*id3v2_metadata, i| {
                 std.debug.print("\nID3v2 Tag #{} (v2.{d})\n===================\n", .{ i + 1, id3v2_metadata.header.major_version });
                 id3v2_metadata.metadata.map.dump();
             }
