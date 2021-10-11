@@ -78,9 +78,9 @@ fn compareMetadata(expected: *const ExpectedMetadata, actual: *const audiometa.m
 }
 
 const ExpectedAllMetadata = struct {
-    all_id3v2: ?[]const ExpectedID3v2Metadata,
-    id3v1: ?ExpectedMetadata,
-    flac: ?ExpectedMetadata,
+    all_id3v2: ?[]const ExpectedID3v2Metadata = null,
+    id3v1: ?ExpectedMetadata = null,
+    flac: ?ExpectedMetadata = null,
 
     pub fn dump(self: *const ExpectedAllMetadata) void {
         if (self.all_id3v2) |all_id3v2| {
@@ -128,8 +128,6 @@ test "standard id3v1" {
                 .{ .name = "genre", .value = "Blues" },
             },
         },
-        .all_id3v2 = null,
-        .flac = null,
     });
 }
 
@@ -142,8 +140,6 @@ test "empty (all zeros) id3v1" {
                 .{ .name = "genre", .value = "Blues" },
             },
         },
-        .all_id3v2 = null,
-        .flac = null,
     });
 }
 
@@ -160,8 +156,6 @@ test "id3v1 with non-ASCII chars (latin1)" {
                 .{ .name = "track", .value = "1" },
             },
         },
-        .all_id3v2 = null,
-        .flac = null,
     });
 }
 
@@ -199,7 +193,6 @@ test "id3v2.3 with UTF-16" {
                 .{ .name = "track", .value = "2" },
             },
         },
-        .flac = null,
     });
 }
 
@@ -224,8 +217,6 @@ test "id3v2.3 with UTF-16 big endian" {
                 },
             },
         },
-        .id3v1 = null,
-        .flac = null,
     });
 }
 
@@ -256,8 +247,6 @@ test "id3v2.3 with user defined fields (TXXX)" {
                 },
             },
         },
-        .id3v1 = null,
-        .flac = null,
     });
 }
 
@@ -282,8 +271,6 @@ test "id3v2.3 with full unsynch tag" {
                 },
             },
         },
-        .id3v1 = null,
-        .flac = null,
     });
 }
 
@@ -308,8 +295,6 @@ test "id3v2.3 with id3v2.2 frame ids" {
                 },
             },
         },
-        .id3v1 = null,
-        .flac = null,
     });
 }
 
@@ -336,8 +321,6 @@ test "id3v2.3 with text frame with zero size" {
                 },
             },
         },
-        .id3v1 = null,
-        .flac = null,
     });
 }
 
@@ -359,8 +342,6 @@ test "id3v2.2" {
                 },
             },
         },
-        .id3v1 = null,
-        .flac = null,
     });
 }
 
@@ -390,8 +371,6 @@ test "id3v2.4 utf16 frames with single u8 delimeters" {
                 },
             },
         },
-        .id3v1 = null,
-        .flac = null,
     });
 }
 
@@ -419,8 +398,6 @@ test "id3v2.3 zero size frame" {
                 },
             },
         },
-        .id3v1 = null,
-        .flac = null,
     });
 }
 
@@ -444,8 +421,6 @@ test "id3v2.4 non-synchsafe frame size" {
                 },
             },
         },
-        .id3v1 = null,
-        .flac = null,
     });
 }
 
@@ -465,8 +440,6 @@ test "id3v2.4 extended header with crc" {
                 },
             },
         },
-        .id3v1 = null,
-        .flac = null,
     });
 }
 
@@ -545,8 +518,6 @@ test "id3v2.4 unsynch text frames" {
                 },
             },
         },
-        .id3v1 = null,
-        .flac = null,
     });
 }
 
@@ -562,8 +533,6 @@ test "id3v2.3 malformed TXXX" {
                 },
             },
         },
-        .id3v1 = null,
-        .flac = null,
     });
 }
 
@@ -579,8 +548,6 @@ test "id3v2.4 malformed TXXX" {
                 },
             },
         },
-        .id3v1 = null,
-        .flac = null,
     });
 }
 
@@ -599,7 +566,5 @@ test "id3v2.3 unsynch tag edge case" {
                 },
             },
         },
-        .id3v1 = null,
-        .flac = null,
     });
 }
