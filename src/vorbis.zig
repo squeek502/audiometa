@@ -124,17 +124,12 @@ fn readHeaderExpectingType(reader: anytype, seekable_stream: anytype, expected_t
 
     const page_segments = try reader.readByte();
     if (page_segments == 0) {
-        return error.ZeroPageSegments;
+        return error.ZeroLengthPage;
     }
 
     var segment_table_buf: [255]u8 = undefined;
     const segment_table = segment_table_buf[0..page_segments];
     try reader.readNoEof(segment_table);
-
-    const header_type = try reader.readByte();
-    if (header_type != @enumToInt(expected_type)) {
-        return error.UnexpectedHeaderType;
-    }
 
     // max is 255 * 255
     var length: u16 = 0;
@@ -142,8 +137,16 @@ fn readHeaderExpectingType(reader: anytype, seekable_stream: anytype, expected_t
         length += val;
     }
 
+    if (length == 0) {
+        return error.ZeroLengthPage;
+    }
+
+    const header_type = try reader.readByte();
+    if (header_type != @enumToInt(expected_type)) {
+        return error.UnexpectedHeaderType;
+    }
+
     // Header type is included in length, so subtract it out since we already read it.
-    // This can't underflow because that would have caused an error.EndOfStream
-    // when we read the header_type byte
+    // This can't underflow because we already checked that length is non-zero.
     return length - 1;
 }
