@@ -52,6 +52,15 @@ fn compareAllMetadata(all_expected: *const ExpectedAllMetadata, all_actual: *con
     } else if (all_actual.flac != null) {
         return error.UnexpectedFLAC;
     }
+    if (all_expected.vorbis) |*expected| {
+        if (all_actual.vorbis) |*actual| {
+            return compareMetadata(expected, actual);
+        } else {
+            return error.MissingVorbis;
+        }
+    } else if (all_actual.vorbis != null) {
+        return error.UnexpectedVorbis;
+    }
 }
 
 fn compareMetadata(expected: *const ExpectedMetadata, actual: *const audiometa.metadata.Metadata) !void {
@@ -81,6 +90,7 @@ const ExpectedAllMetadata = struct {
     all_id3v2: ?[]const ExpectedID3v2Metadata = null,
     id3v1: ?ExpectedMetadata = null,
     flac: ?ExpectedMetadata = null,
+    vorbis: ?ExpectedMetadata = null,
 
     pub fn dump(self: *const ExpectedAllMetadata) void {
         if (self.all_id3v2) |all_id3v2| {
@@ -100,6 +110,12 @@ const ExpectedAllMetadata = struct {
         if (self.flac) |flac_meta| {
             std.debug.print("# FLAC 0x{x}-0x{x}\n", .{ flac_meta.start_offset, flac_meta.end_offset });
             for (flac_meta.map) |entry| {
+                std.debug.print("{s}={s}\n", .{ fmtUtf8SliceEscapeUpper(entry.name), fmtUtf8SliceEscapeUpper(entry.value) });
+            }
+        }
+        if (self.vorbis) |vorbis_meta| {
+            std.debug.print("# Vorbis 0x{x}-0x{x}\n", .{ vorbis_meta.start_offset, vorbis_meta.end_offset });
+            for (vorbis_meta.map) |entry| {
                 std.debug.print("{s}={s}\n", .{ fmtUtf8SliceEscapeUpper(entry.name), fmtUtf8SliceEscapeUpper(entry.value) });
             }
         }
@@ -564,6 +580,26 @@ test "id3v2.3 unsynch tag edge case" {
                     .end_offset = 0x43,
                     .map = &[_]MetadataEntry{},
                 },
+            },
+        },
+    });
+}
+
+test "ogg" {
+    try parseExpectedMetadata("data/vorbis.ogg", .{
+        .all_id3v2 = null,
+        .id3v1 = null,
+        .flac = null,
+        .vorbis = ExpectedMetadata{
+            .start_offset = 0x6d,
+            .end_offset = 0x10ff,
+            .map = &[_]MetadataEntry{
+                .{ .name = "ALBUM", .value = "PIRATE" },
+                .{ .name = "ARTIST", .value = "TROMATISM" },
+                .{ .name = "GENRE", .value = "PUNK" },
+                .{ .name = "TITLE", .value = "Paria" },
+                .{ .name = "TRACKNUMBER", .value = "20" },
+                .{ .name = "COMMENT", .value = "http://www.sauve-qui-punk.org" },
             },
         },
     });

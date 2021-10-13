@@ -17,7 +17,7 @@ pub fn main() anyerror!void {
 
     const in_path = args[1];
     const out_path = args[2];
-    const TagType = enum { id3v2, id3v1, flac };
+    const TagType = enum { id3v2, id3v1, flac, vorbis };
     var type_selection: ?TagType = blk: {
         if (args.len < 4) break :blk null;
         const selection_str = args[3];
@@ -63,6 +63,13 @@ pub fn main() anyerror!void {
             try buf_writer.writeByte(audiometa.flac.block_type_vorbis_comment | is_last_metadata_block);
             try buf_writer.writeIntBig(u24, @intCast(u24, flac_metadata.end_offset - flac_metadata.start_offset));
             try sliceFileIntoBuf(&buf, file, flac_metadata.start_offset, flac_metadata.end_offset);
+        }
+    }
+    if (type_selection == null or type_selection.? == .vorbis) {
+        if (metadata.vorbis) |*vorbis_metadata| {
+            // This is slightly hacky, but just take from the presumed start of the
+            // Vorbis bitstream since we need that too
+            try sliceFileIntoBuf(&buf, file, 0, vorbis_metadata.end_offset);
         }
     }
     if (type_selection == null or type_selection.? == .id3v1) {

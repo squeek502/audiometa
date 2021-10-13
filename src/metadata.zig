@@ -2,6 +2,7 @@ const std = @import("std");
 const id3v2 = @import("id3v2.zig");
 const id3v1 = @import("id3v1.zig");
 const flac = @import("flac.zig");
+const vorbis = @import("vorbis.zig");
 const Allocator = std.mem.Allocator;
 const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
 const BufferedStreamSource = @import("buffered_stream_source.zig").BufferedStreamSource;
@@ -46,12 +47,18 @@ pub fn readAll(allocator: *Allocator, stream_source: *std.io.StreamSource) !AllM
         error.OutOfMemory => |err| return err,
         else => null,
     };
+    try seekable_stream.seekTo(pos_after_last_id3v2);
+    var vorbis_metadata: ?Metadata = vorbis.read(allocator, reader, seekable_stream) catch |e| switch (e) {
+        error.OutOfMemory => |err| return err,
+        else => null,
+    };
 
     return AllMetadata{
         .allocator = allocator,
         .all_id3v2 = all_id3v2_metadata,
         .id3v1 = id3v1_metadata,
         .flac = flac_metadata,
+        .vorbis = vorbis_metadata,
     };
 }
 
@@ -59,8 +66,10 @@ pub const AllMetadata = struct {
     allocator: *Allocator,
     all_id3v2: ?AllID3v2Metadata,
     id3v1: ?Metadata,
-    // TODO rename? xiph? vorbis?
     flac: ?Metadata,
+    // TODO: Combine with flac? I don't think there can be
+    //       a file with both Ogg and FLAC vorbis comments
+    vorbis: ?Metadata,
 
     pub fn deinit(self: *AllMetadata) void {
         if (self.all_id3v2) |*all_id3v2| {
@@ -71,6 +80,9 @@ pub const AllMetadata = struct {
         }
         if (self.flac) |*flac_metadata| {
             flac_metadata.deinit();
+        }
+        if (self.vorbis) |*vorbis_metadata| {
+            vorbis_metadata.deinit();
         }
     }
 
@@ -88,6 +100,10 @@ pub const AllMetadata = struct {
         if (self.flac) |*flac_meta| {
             std.debug.print("# FLAC 0x{x}-0x{x}\n", .{ flac_meta.start_offset, flac_meta.end_offset });
             flac_meta.map.dump();
+        }
+        if (self.vorbis) |*vorbis_meta| {
+            std.debug.print("# Vorbis 0x{x}-0x{x}\n", .{ vorbis_meta.start_offset, vorbis_meta.end_offset });
+            vorbis_meta.map.dump();
         }
     }
 };

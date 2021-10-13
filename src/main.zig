@@ -31,5 +31,9 @@ pub fn main() anyerror!void {
             std.debug.print("\nID3v1 Tag\n=========\n", .{});
             id3v1_metadata.map.dump();
         }
+        if (metadata.vorbis) |*vorbis_metadata| {
+            std.debug.print("\nVorbis Tag\n==========\n", .{});
+            vorbis_metadata.map.dump();
+        }
     }
 }
