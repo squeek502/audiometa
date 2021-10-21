@@ -19,7 +19,7 @@ pub const ID3Header = struct {
     pub const len: usize = 10;
 
     pub fn read(reader: anytype) !ID3Header {
-        const header = try reader.readBytesNoEof(10);
+        const header = try reader.readBytesNoEof(ID3Header.len);
         if (!std.mem.eql(u8, header[0..3], id3v2_identifier)) {
             return error.InvalidIdentifier;
         }

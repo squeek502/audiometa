@@ -61,6 +61,16 @@ fn compareAllMetadata(all_expected: *const ExpectedAllMetadata, all_actual: *con
     } else if (all_actual.vorbis != null) {
         return error.UnexpectedVorbis;
     }
+    if (all_expected.ape_suffixed) |*expected| {
+        if (all_actual.ape_suffixed) |*actual| {
+            try testing.expectEqual(expected.version, actual.header_or_footer.version);
+            return compareMetadata(&expected.metadata, &actual.metadata);
+        } else {
+            return error.MissingAPE;
+        }
+    } else if (all_actual.ape_suffixed != null) {
+        return error.UnexpectedAPE;
+    }
 }
 
 fn compareMetadata(expected: *const ExpectedMetadata, actual: *const audiometa.metadata.Metadata) !void {
@@ -91,6 +101,7 @@ const ExpectedAllMetadata = struct {
     id3v1: ?ExpectedMetadata = null,
     flac: ?ExpectedMetadata = null,
     vorbis: ?ExpectedMetadata = null,
+    ape_suffixed: ?ExpectedAPEMetadata = null,
 
     pub fn dump(self: *const ExpectedAllMetadata) void {
         if (self.all_id3v2) |all_id3v2| {
@@ -119,11 +130,21 @@ const ExpectedAllMetadata = struct {
                 std.debug.print("{s}={s}\n", .{ fmtUtf8SliceEscapeUpper(entry.name), fmtUtf8SliceEscapeUpper(entry.value) });
             }
         }
+        if (self.ape_suffixed) |ape_meta| {
+            std.debug.print("# APE (suffixed) 0x{x}-0x{x}\n", .{ ape_meta.metadata.start_offset, ape_meta.metadata.end_offset });
+            for (ape_meta.metadata.map) |entry| {
+                std.debug.print("{s}={s}\n", .{ fmtUtf8SliceEscapeUpper(entry.name), fmtUtf8SliceEscapeUpper(entry.value) });
+            }
+        }
     }
 };
 const ExpectedID3v2Metadata = struct {
     metadata: ExpectedMetadata,
     major_version: u8,
+};
+const ExpectedAPEMetadata = struct {
+    version: u32,
+    metadata: ExpectedMetadata,
 };
 const ExpectedMetadata = struct {
     start_offset: usize,
@@ -587,9 +608,6 @@ test "id3v2.3 unsynch tag edge case" {
 
 test "ogg" {
     try parseExpectedMetadata("data/vorbis.ogg", .{
-        .all_id3v2 = null,
-        .id3v1 = null,
-        .flac = null,
         .vorbis = ExpectedMetadata{
             .start_offset = 0x6d,
             .end_offset = 0x10ff,
@@ -600,6 +618,94 @@ test "ogg" {
                 .{ .name = "TITLE", .value = "Paria" },
                 .{ .name = "TRACKNUMBER", .value = "20" },
                 .{ .name = "COMMENT", .value = "http://www.sauve-qui-punk.org" },
+            },
+        },
+    });
+}
+
+test "ape" {
+    try parseExpectedMetadata("data/ape.mp3", .{
+        .ape_suffixed = ExpectedAPEMetadata{
+            .version = 2000,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0xce,
+                .map = &[_]MetadataEntry{
+                    .{ .name = "MP3GAIN_MINMAX", .value = "151,190" },
+                    .{ .name = "MP3GAIN_UNDO", .value = "-006,-006,N" },
+                    .{ .name = "REPLAYGAIN_TRACK_GAIN", .value = "-11.27000 dB" },
+                    .{ .name = "REPLAYGAIN_TRACK_PEAK", .value = "2.003078" },
+                },
+            },
+        },
+    });
+}
+
+test "ape with id3v2 and id3v1 tags" {
+    try parseExpectedMetadata("data/ape_and_id3.mp3", .{
+        .all_id3v2 = &[_]ExpectedID3v2Metadata{
+            .{
+                .major_version = 3,
+                .metadata = .{
+                    .start_offset = 0x0,
+                    .end_offset = 0x998,
+                    .map = &[_]MetadataEntry{
+                        .{ .name = "TLAN", .value = "rus" },
+                        .{ .name = "TRCK", .value = "1/7" },
+                        .{ .name = "TPE1", .value = "Axidance" },
+                        .{ .name = "Rip date", .value = "2012-08-10" },
+                        .{ .name = "TYER", .value = "2012" },
+                        .{ .name = "TDAT", .value = "0000" },
+                        .{ .name = "Source", .value = "Vinyl" },
+                        .{ .name = "TSSE", .value = "LAME v3.98.4 with preset -V0" },
+                        .{ .name = "Ripping tool", .value = "Sony Sound Forge Pro v10.0a" },
+                        .{ .name = "Release type", .value = "Split 12inch" },
+                        .{ .name = "TCON", .value = "Hardcore" },
+                        .{ .name = "Language 2-letter", .value = "RU" },
+                        .{ .name = "TPUB", .value = "pure heart" },
+                        .{ .name = "VA Artist", .value = "Axidance" },
+                        .{ .name = "TALB", .value = "Gattaca" },
+                        .{ .name = "TIT2", .value = "Aeon I - The Great Enemy" },
+                    },
+                },
+            },
+        },
+        .ape_suffixed = ExpectedAPEMetadata{
+            .version = 2000,
+            .metadata = .{
+                .start_offset = 0x998,
+                .end_offset = 0xba4,
+                .map = &[_]MetadataEntry{
+                    .{ .name = "Language", .value = "Russian" },
+                    .{ .name = "Disc", .value = "1" },
+                    .{ .name = "Track", .value = "1" },
+                    .{ .name = "Artist", .value = "Axidance" },
+                    .{ .name = "Rip Date", .value = "2012-08-10" },
+                    .{ .name = "Year", .value = "2012" },
+                    .{ .name = "Retail Date", .value = "2012-00-00" },
+                    .{ .name = "Media", .value = "Vinyl" },
+                    .{ .name = "Encoder", .value = "LAME v3.98.4 with preset -V0" },
+                    .{ .name = "Ripping Tool", .value = "Sony Sound Forge Pro v10.0a" },
+                    .{ .name = "Release Type", .value = "Split 12inch" },
+                    .{ .name = "Genre", .value = "Hardcore" },
+                    .{ .name = "Language 2-letter", .value = "RU" },
+                    .{ .name = "Publisher", .value = "pure heart" },
+                    .{ .name = "Album Artist", .value = "Axidance" },
+                    .{ .name = "Album", .value = "Gattaca" },
+                    .{ .name = "Title", .value = "Aeon I - The Great Enemy" },
+                },
+            },
+        },
+        .id3v1 = ExpectedMetadata{
+            .start_offset = 0xba4,
+            .end_offset = 0xc24,
+            .map = &[_]MetadataEntry{
+                .{ .name = "title", .value = "Aeon I - The Great Enemy" },
+                .{ .name = "artist", .value = "Axidance" },
+                .{ .name = "album", .value = "Gattaca" },
+                .{ .name = "date", .value = "2012" },
+                .{ .name = "track", .value = "1" },
+                .{ .name = "genre", .value = "Hardcore Techno" },
             },
         },
     });

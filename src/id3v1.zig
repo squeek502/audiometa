@@ -9,6 +9,7 @@ const Metadata = @import("metadata.zig").Metadata;
 const latin1ToUtf8 = @import("latin1.zig").latin1ToUtf8;
 
 pub const id3v1_identifier = "TAG";
+pub const tag_size = 128;
 
 pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !Metadata {
     var metadata: Metadata = Metadata.init(allocator);
@@ -17,16 +18,16 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
     var metadata_map = &metadata.map;
 
     var end_pos = try seekable_stream.getEndPos();
-    if (end_pos < 128) {
+    if (end_pos < tag_size) {
         return error.EndOfStream;
     }
 
-    const start_offset = end_pos - 128;
+    const start_offset = end_pos - tag_size;
     metadata.start_offset = start_offset;
     metadata.end_offset = end_pos;
 
     try seekable_stream.seekTo(start_offset);
-    const data = try reader.readBytesNoEof(128);
+    const data = try reader.readBytesNoEof(tag_size);
     if (!std.mem.eql(u8, data[0..3], id3v1_identifier)) {
         return error.InvalidIdentifier;
     }

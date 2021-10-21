@@ -35,5 +35,9 @@ pub fn main() anyerror!void {
             std.debug.print("\nVorbis Tag\n==========\n", .{});
             vorbis_metadata.map.dump();
         }
+        if (metadata.ape_suffixed) |*ape_metadata| {
+            std.debug.print("\nAPE Tag (v{d})\n=============\n", .{ape_metadata.header_or_footer.version});
+            ape_metadata.metadata.map.dump();
+        }
     }
 }

@@ -17,7 +17,7 @@ pub fn main() anyerror!void {
 
     const in_path = args[1];
     const out_path = args[2];
-    const TagType = enum { id3v2, id3v1, flac, vorbis };
+    const TagType = enum { id3v2, id3v1, flac, vorbis, ape_suffixed };
     var type_selection: ?TagType = blk: {
         if (args.len < 4) break :blk null;
         const selection_str = args[3];
@@ -70,6 +70,11 @@ pub fn main() anyerror!void {
             // This is slightly hacky, but just take from the presumed start of the
             // Vorbis bitstream since we need that too
             try sliceFileIntoBuf(&buf, file, 0, vorbis_metadata.end_offset);
+        }
+    }
+    if (type_selection == null or type_selection.? == .ape_suffixed) {
+        if (metadata.ape_suffixed) |*ape_metadata| {
+            try sliceFileIntoBuf(&buf, file, ape_metadata.metadata.start_offset, ape_metadata.metadata.end_offset);
         }
     }
     if (type_selection == null or type_selection.? == .id3v1) {

@@ -3,6 +3,7 @@ const id3v2 = @import("id3v2.zig");
 const id3v1 = @import("id3v1.zig");
 const flac = @import("flac.zig");
 const vorbis = @import("vorbis.zig");
+const ape = @import("ape.zig");
 const Allocator = std.mem.Allocator;
 const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
 const BufferedStreamSource = @import("buffered_stream_source.zig").BufferedStreamSource;
@@ -28,10 +29,6 @@ pub fn readAll(allocator: *Allocator, stream_source: *std.io.StreamSource) !AllM
         error.OutOfMemory => |err| return err,
         else => null,
     };
-    var id3v1_metadata: ?Metadata = id3v1.read(allocator, reader, seekable_stream) catch |e| switch (e) {
-        error.OutOfMemory => |err| return err,
-        else => null,
-    };
     // TODO: this isnt correct for id3v2 tags at the end of a file or when a SEEK frame is used
     var pos_after_last_id3v2: usize = blk: {
         if (all_id3v2_metadata) |id3v2_metadata| {
@@ -52,6 +49,16 @@ pub fn readAll(allocator: *Allocator, stream_source: *std.io.StreamSource) !AllM
         error.OutOfMemory => |err| return err,
         else => null,
     };
+    const end_pos = try seekable_stream.getEndPos();
+    try seekable_stream.seekTo(end_pos);
+    var ape_suffixed_metadata: ?APEMetadata = ape.readFromFooter(allocator, reader, seekable_stream) catch |e| switch (e) {
+        error.OutOfMemory => |err| return err,
+        else => null,
+    };
+    var id3v1_metadata: ?Metadata = id3v1.read(allocator, reader, seekable_stream) catch |e| switch (e) {
+        error.OutOfMemory => |err| return err,
+        else => null,
+    };
 
     return AllMetadata{
         .allocator = allocator,
@@ -59,6 +66,7 @@ pub fn readAll(allocator: *Allocator, stream_source: *std.io.StreamSource) !AllM
         .id3v1 = id3v1_metadata,
         .flac = flac_metadata,
         .vorbis = vorbis_metadata,
+        .ape_suffixed = ape_suffixed_metadata,
     };
 }
 
@@ -70,6 +78,7 @@ pub const AllMetadata = struct {
     // TODO: Combine with flac? I don't think there can be
     //       a file with both Ogg and FLAC vorbis comments
     vorbis: ?Metadata,
+    ape_suffixed: ?APEMetadata,
 
     pub fn deinit(self: *AllMetadata) void {
         if (self.all_id3v2) |*all_id3v2| {
@@ -83,6 +92,9 @@ pub const AllMetadata = struct {
         }
         if (self.vorbis) |*vorbis_metadata| {
             vorbis_metadata.deinit();
+        }
+        if (self.ape_suffixed) |*ape_metadata| {
+            ape_metadata.deinit();
         }
     }
 
@@ -104,6 +116,10 @@ pub const AllMetadata = struct {
         if (self.vorbis) |*vorbis_meta| {
             std.debug.print("# Vorbis 0x{x}-0x{x}\n", .{ vorbis_meta.start_offset, vorbis_meta.end_offset });
             vorbis_meta.map.dump();
+        }
+        if (self.ape_suffixed) |*ape_meta| {
+            std.debug.print("# APEv{d} (suffixed) 0x{x}-0x{x}\n", .{ ape_meta.header_or_footer.version, ape_meta.metadata.start_offset, ape_meta.metadata.end_offset });
+            ape_meta.metadata.map.dump();
         }
     }
 };
@@ -132,6 +148,34 @@ pub const ID3v2Metadata = struct {
     }
 
     pub fn deinit(self: *ID3v2Metadata) void {
+        self.metadata.deinit();
+    }
+};
+
+pub const AllAPEMetadata = struct {
+    allocator: *Allocator,
+    tags: []APEMetadata,
+
+    pub fn deinit(self: *AllAPEMetadata) void {
+        for (self.tags) |*tag| {
+            tag.deinit();
+        }
+        self.allocator.free(self.tags);
+    }
+};
+
+pub const APEMetadata = struct {
+    metadata: Metadata,
+    header_or_footer: ape.APEHeader,
+
+    pub fn init(allocator: *Allocator, header_or_footer: ape.APEHeader, start_offset: usize, end_offset: usize) APEMetadata {
+        return .{
+            .metadata = Metadata.initWithOffsets(allocator, start_offset, end_offset),
+            .header_or_footer = header_or_footer,
+        };
+    }
+
+    pub fn deinit(self: *APEMetadata) void {
         self.metadata.deinit();
     }
 };
