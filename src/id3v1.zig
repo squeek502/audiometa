@@ -4,7 +4,6 @@ const Allocator = std.mem.Allocator;
 const synchsafe = @import("synchsafe.zig");
 const latin1 = @import("latin1.zig");
 const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
-const nulTerminated = @import("util.zig").nulTerminated;
 const unsynch = @import("unsynch.zig");
 const Metadata = @import("metadata.zig").Metadata;
 const latin1ToUtf8 = @import("latin1.zig").latin1ToUtf8;
@@ -32,11 +31,11 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
         return error.InvalidIdentifier;
     }
 
-    const song_name = std.mem.trimRight(u8, nulTerminated(data[3..33]), " ");
-    const artist = std.mem.trimRight(u8, nulTerminated(data[33..63]), " ");
-    const album_name = std.mem.trimRight(u8, nulTerminated(data[63..93]), " ");
-    const year = std.mem.trimRight(u8, nulTerminated(data[93..97]), " ");
-    const comment = std.mem.trimRight(u8, nulTerminated(data[97..127]), " ");
+    const song_name = std.mem.trimRight(u8, std.mem.sliceTo(data[3..33], '\x00'), " ");
+    const artist = std.mem.trimRight(u8, std.mem.sliceTo(data[33..63], '\x00'), " ");
+    const album_name = std.mem.trimRight(u8, std.mem.sliceTo(data[63..93], '\x00'), " ");
+    const year = std.mem.trimRight(u8, std.mem.sliceTo(data[93..97], '\x00'), " ");
+    const comment = std.mem.trimRight(u8, std.mem.sliceTo(data[97..127], '\x00'), " ");
     const could_be_v1_1 = data[125] == '\x00';
     const track_num = data[126];
     const genre = data[127];

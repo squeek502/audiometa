@@ -9,7 +9,6 @@ const MetadataMap = meta.MetadataMap;
 const Metadata = meta.Metadata;
 const unsynch = audiometa.unsynch;
 const Allocator = std.mem.Allocator;
-const nulTerminated = audiometa.util.nulTerminated;
 
 const start_testing_at_prefix = "";
 
@@ -276,7 +275,7 @@ const id3v2_2_name_lookup = std.ComptimeStringMap([]const u8, .{
 fn convertIdToName(id: []const u8) ?[]const u8 {
     // this is the order of precedence that ffmpeg does this
     // it also does not care about the major version, it just converts things unconditionally
-    return id3v2_34_name_lookup.get(id) orelse id3v2_2_name_lookup.get(nulTerminated(id)) orelse id3v2_4_name_lookup.get(id);
+    return id3v2_34_name_lookup.get(id) orelse id3v2_2_name_lookup.get(std.mem.sliceTo(id, '\x00')) orelse id3v2_4_name_lookup.get(id);
 }
 
 fn compareMetadata(allocator: *Allocator, expected: *MetadataArray, actual: *MetadataMap) !void {

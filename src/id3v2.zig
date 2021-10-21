@@ -7,7 +7,6 @@ const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
 const unsynch = @import("unsynch.zig");
 const AllID3v2Metadata = @import("metadata.zig").AllID3v2Metadata;
 const ID3v2Metadata = @import("metadata.zig").ID3v2Metadata;
-const nulTerminated = @import("util.zig").nulTerminated;
 
 pub const id3v2_identifier = "ID3";
 
@@ -218,7 +217,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
 
         // Treat as NUL terminated because some v2.3 tags will use 3 length IDs
         // with a NUL as the 4th char, and we should handle those as NUL terminated
-        const id = nulTerminated(frame_header.idSlice(id3_major_version));
+        const id = std.mem.sliceTo(frame_header.idSlice(id3_major_version), '\x00');
         const user_defined_id = switch (id.len) {
             3 => "TXX",
             else => "TXXX",

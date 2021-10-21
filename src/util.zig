@@ -1,15 +1,5 @@
 const std = @import("std");
 
-/// Returns the portion of the slice before the first NUL character.
-/// There's probably something to do this in the std lib but I can't find it
-pub fn nulTerminated(x: []const u8) []const u8 {
-    if (std.mem.indexOfScalar(u8, x, '\x00')) |nul_index| {
-        return x[0..nul_index];
-    } else {
-        return x;
-    }
-}
-
 pub const Case = enum { lower, upper };
 
 fn isUtf8ControlCode(c: []const u8) bool {
