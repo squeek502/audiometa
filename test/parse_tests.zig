@@ -610,7 +610,24 @@ test "ogg" {
     try parseExpectedMetadata("data/vorbis.ogg", .{
         .vorbis = ExpectedMetadata{
             .start_offset = 0x6d,
-            .end_offset = 0x10ff,
+            .end_offset = 0x10e,
+            .map = &[_]MetadataEntry{
+                .{ .name = "ALBUM", .value = "PIRATE" },
+                .{ .name = "ARTIST", .value = "TROMATISM" },
+                .{ .name = "GENRE", .value = "PUNK" },
+                .{ .name = "TITLE", .value = "Paria" },
+                .{ .name = "TRACKNUMBER", .value = "20" },
+                .{ .name = "COMMENT", .value = "http://www.sauve-qui-punk.org" },
+            },
+        },
+    });
+}
+
+test "ogg" {
+    try parseExpectedMetadata("data/vorbis_comment_spanning_pages.ogg", .{
+        .vorbis = ExpectedMetadata{
+            .start_offset = 0x5d,
+            .end_offset = 0x11a,
             .map = &[_]MetadataEntry{
                 .{ .name = "ALBUM", .value = "PIRATE" },
                 .{ .name = "ARTIST", .value = "TROMATISM" },

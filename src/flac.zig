@@ -24,8 +24,30 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
         const length = try reader.readIntBig(u24);
 
         if (block_type == block_type_vorbis_comment) {
+            const start_offset = try seekable_stream.getPos();
+            const end_offset = start_offset + length;
+
+            // since we know the length, we can read it all up front
+            // and then wrap it in a FixedBufferStream so that we can
+            // get bounds-checking in our read calls when reading the
+            // comment without any special casing
+            var comments = try allocator.alloc(u8, length);
+            defer allocator.free(comments);
+            try reader.readNoEof(comments);
+
+            var fixed_buffer_stream = std.io.fixedBufferStream(comments);
+
             // There can only be one comment block per stream, so we can return here
-            return vorbis.readComment(allocator, reader, seekable_stream, length);
+            var metadata = vorbis.readComment(allocator, fixed_buffer_stream.reader()) catch |e| switch (e) {
+                error.EndOfStream => return error.EndOfCommentBlock,
+                else => |err| return err,
+            };
+            errdefer metadata.deinit();
+
+            metadata.start_offset = start_offset;
+            metadata.end_offset = end_offset;
+
+            return metadata;
         } else {
             // skipping bytes in the reader actually reads the bytes which is a
             // huge waste of time, this is way faster
