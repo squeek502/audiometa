@@ -23,6 +23,13 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
         const block_type = first_byte & 0x7F;
         const length = try reader.readIntBig(u24);
 
+        // short circuit for impossible comment lengths to avoid
+        // giant allocations that we know are impossible to read
+        const max_remaining_bytes = (try seekable_stream.getEndPos()) - (try seekable_stream.getPos());
+        if (length > max_remaining_bytes) {
+            return error.EndOfStream;
+        }
+
         if (block_type == block_type_vorbis_comment) {
             const start_offset = try seekable_stream.getPos();
             const end_offset = start_offset + length;

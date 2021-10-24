@@ -373,6 +373,9 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !A
         };
 
         const end_offset = start_offset + ID3Header.len + id3_header.size;
+        if (end_offset > try seekable_stream.getEndPos()) {
+            return error.EndOfStream;
+        }
         try metadata_buf.append(ID3v2Metadata.init(allocator, id3_header, start_offset, end_offset));
         var metadata_id3v2_container = &metadata_buf.items[metadata_buf.items.len - 1];
         var metadata = &metadata_id3v2_container.metadata;
