@@ -623,7 +623,7 @@ test "ogg" {
     });
 }
 
-test "ogg" {
+test "ogg with vorbis comment data spanning multiple pages" {
     try parseExpectedMetadata("data/vorbis_comment_spanning_pages.ogg", .{
         .vorbis = ExpectedMetadata{
             .start_offset = 0x5d,
