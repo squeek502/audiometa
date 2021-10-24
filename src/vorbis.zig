@@ -21,7 +21,7 @@ pub const PacketType = enum(u8) {
 const fresh_packet = 0x00;
 const first_page_of_logical_bitstream = 0x02;
 
-pub fn readComment(allocator: *Allocator, reader: anytype) !Metadata {
+pub fn readComment(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !Metadata {
     var metadata: Metadata = Metadata.init(allocator);
     errdefer metadata.deinit();
 
@@ -34,6 +34,13 @@ pub fn readComment(allocator: *Allocator, reader: anytype) !Metadata {
     var user_comment_index: u32 = 0;
     while (user_comment_index < user_comment_list_length) : (user_comment_index += 1) {
         const comment_length = try reader.readIntLittle(u32);
+
+        // short circuit for impossible comment lengths to avoid
+        // giant allocations that we know are impossible to read
+        const max_remaining_bytes = (try seekable_stream.getEndPos()) - (try seekable_stream.getPos());
+        if (comment_length > max_remaining_bytes) {
+            return error.EndOfStream;
+        }
 
         var comment = try allocator.alloc(u8, comment_length);
         defer allocator.free(comment);
@@ -82,7 +89,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
     }
 
     const start_offset = try seekable_stream.getPos();
-    var metadata = try readComment(allocator, ogg_page_reader);
+    var metadata = try readComment(allocator, ogg_page_reader, seekable_stream);
     errdefer metadata.deinit();
 
     metadata.start_offset = start_offset;

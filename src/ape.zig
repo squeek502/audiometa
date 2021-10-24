@@ -153,6 +153,14 @@ pub fn readItems(allocator: *Allocator, reader: anytype, seekable_stream: anytyp
     var i: usize = 0;
     while (i < ape_metadata.header_or_footer.item_count and try seekable_stream.getPos() < end_of_items_offset_with_space_for_item) : (i += 1) {
         const value_size = try reader.readIntLittle(u32);
+
+        // short circuit for impossibly long values, no need to actually
+        // allocate and try reading them
+        const cur_pos = try seekable_stream.getPos();
+        if (cur_pos + value_size > end_of_items_offset) {
+            return error.EndOfStream;
+        }
+
         const item_flags = APETagFlags{ .flags = try reader.readIntLittle(u32) };
         switch (item_flags.itemDataType()) {
             .utf8 => {
