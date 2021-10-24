@@ -144,6 +144,10 @@ pub fn readFromFooter(allocator: *Allocator, reader: anytype, seekable_stream: a
 pub fn readItems(allocator: *Allocator, reader: anytype, seekable_stream: anytype, ape_metadata: *APEMetadata, end_of_items_offset: usize) !void {
     var metadata_map = &ape_metadata.metadata.map;
 
+    if (end_of_items_offset < 9) {
+        return error.EndOfStream;
+    }
+
     // The `- 9` comes from (u32 size + u32 flags + \x00 item key terminator)
     const end_of_items_offset_with_space_for_item = end_of_items_offset - 9;
     var i: usize = 0;
