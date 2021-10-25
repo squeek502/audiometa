@@ -7,8 +7,14 @@ const ape = @import("ape.zig");
 const Allocator = std.mem.Allocator;
 const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
 const BufferedStreamSource = @import("buffered_stream_source.zig").BufferedStreamSource;
+const time = std.time;
+const Timer = time.Timer;
+
+var timer: Timer = undefined;
 
 pub fn readAll(allocator: *Allocator, stream_source: *std.io.StreamSource) !AllMetadata {
+    timer = try Timer.start();
+
     // Note: Using a buffered stream source here doesn't actually seem to make much
     // difference performance-wise for most files. However, it probably does give a performance
     // boost when reading unsynch files, since UnsynchCapableReader reads byte-by-byte
@@ -25,102 +31,230 @@ pub fn readAll(allocator: *Allocator, stream_source: *std.io.StreamSource) !AllM
     var reader = buffered_stream_source.reader();
     var seekable_stream = buffered_stream_source.seekableStream();
 
-    var all_id3v2_metadata: ?AllID3v2Metadata = id3v2.read(allocator, reader, seekable_stream) catch |e| switch (e) {
-        error.OutOfMemory => |err| return err,
-        else => null,
-    };
-    // TODO: this isnt correct for id3v2 tags at the end of a file or when a SEEK frame is used
-    var pos_after_last_id3v2: usize = blk: {
-        if (all_id3v2_metadata) |id3v2_metadata| {
-            if (id3v2_metadata.tags.len > 0) {
-                var last_offset = id3v2_metadata.tags[id3v2_metadata.tags.len - 1].metadata.end_offset;
-                break :blk last_offset;
+    var all_metadata = std.ArrayList(TypedMetadata).init(allocator);
+    errdefer {
+        var cleanup_helper = AllMetadata{
+            .allocator = allocator,
+            .tags = all_metadata.toOwnedSlice(),
+        };
+        cleanup_helper.deinit();
+    }
+
+    var time_taken = timer.read();
+    std.debug.print("setup: {}us\n", .{time_taken / time.ns_per_us});
+    timer.reset();
+
+    // TODO: this won't handle id3v2 tags at the end of a file or when a SEEK frame is used
+
+    while (true) {
+        const initial_pos = try seekable_stream.getPos();
+
+        var id3v2_meta: ?ID3v2Metadata = id3v2.read(allocator, reader, seekable_stream) catch |e| switch (e) {
+            error.OutOfMemory => |err| return err,
+            else => null,
+        };
+        if (id3v2_meta != null) {
+            {
+                errdefer id3v2_meta.?.deinit();
+                try all_metadata.append(TypedMetadata{ .id3v2 = id3v2_meta.? });
             }
+            continue;
         }
-        break :blk 0;
-    };
-    try seekable_stream.seekTo(pos_after_last_id3v2);
-    var flac_metadata: ?Metadata = flac.read(allocator, reader, seekable_stream) catch |e| switch (e) {
-        error.OutOfMemory => |err| return err,
-        else => null,
-    };
-    try seekable_stream.seekTo(pos_after_last_id3v2);
-    var vorbis_metadata: ?Metadata = vorbis.read(allocator, reader, seekable_stream) catch |e| switch (e) {
-        error.OutOfMemory => |err| return err,
-        else => null,
-    };
+
+        try seekable_stream.seekTo(initial_pos);
+        var flac_metadata: ?Metadata = flac.read(allocator, reader, seekable_stream) catch |e| switch (e) {
+            error.OutOfMemory => |err| return err,
+            else => null,
+        };
+        if (flac_metadata != null) {
+            {
+                errdefer flac_metadata.?.deinit();
+                try all_metadata.append(TypedMetadata{ .flac = flac_metadata.? });
+            }
+            continue;
+        }
+
+        try seekable_stream.seekTo(initial_pos);
+        var vorbis_metadata: ?Metadata = vorbis.read(allocator, reader, seekable_stream) catch |e| switch (e) {
+            error.OutOfMemory => |err| return err,
+            else => null,
+        };
+        if (vorbis_metadata != null) {
+            {
+                errdefer vorbis_metadata.?.deinit();
+                try all_metadata.append(TypedMetadata{ .vorbis = vorbis_metadata.? });
+            }
+            continue;
+        }
+
+        try seekable_stream.seekTo(initial_pos);
+        var ape_metadata: ?APEMetadata = ape.readFromHeader(allocator, reader, seekable_stream) catch |e| switch (e) {
+            error.OutOfMemory => |err| return err,
+            else => null,
+        };
+        if (ape_metadata != null) {
+            {
+                errdefer ape_metadata.?.deinit();
+                try all_metadata.append(TypedMetadata{ .ape = ape_metadata.? });
+            }
+            continue;
+        }
+
+        // if we get here, then we're out of valid tag headers to parse
+        break;
+    }
+
+    time_taken = timer.read();
+    std.debug.print("prefixed tags: {}us\n", .{time_taken / time.ns_per_us});
+    timer.reset();
+
     const end_pos = try seekable_stream.getEndPos();
     try seekable_stream.seekTo(end_pos);
-    var ape_suffixed_metadata: ?APEMetadata = ape.readFromFooter(allocator, reader, seekable_stream) catch |e| switch (e) {
-        error.OutOfMemory => |err| return err,
-        else => null,
+
+    const last_tag_end_offset: ?usize = offset: {
+        if (all_metadata.items.len == 0) break :offset null;
+        const last_tag = all_metadata.items[all_metadata.items.len - 1];
+        break :offset switch (last_tag) {
+            .id3v1, .flac, .vorbis => |v| v.end_offset,
+            .id3v2 => |v| v.metadata.end_offset,
+            .ape => |v| v.metadata.end_offset,
+        };
     };
-    var id3v1_metadata: ?Metadata = id3v1.read(allocator, reader, seekable_stream) catch |e| switch (e) {
-        error.OutOfMemory => |err| return err,
-        else => null,
-    };
+
+    while (true) {
+        const initial_pos = try seekable_stream.getPos();
+
+        // we don't want to read any tags that have already been read, so
+        // if we're going to read into the last already read tag, then bail out
+        if (last_tag_end_offset != null and try seekable_stream.getPos() <= last_tag_end_offset.?) {
+            break;
+        }
+        var id3v1_metadata: ?Metadata = id3v1.read(allocator, reader, seekable_stream) catch |e| switch (e) {
+            error.OutOfMemory => |err| return err,
+            else => null,
+        };
+        if (id3v1_metadata != null) {
+            {
+                errdefer id3v1_metadata.?.deinit();
+                try all_metadata.append(TypedMetadata{ .id3v1 = id3v1_metadata.? });
+            }
+            try seekable_stream.seekTo(id3v1_metadata.?.start_offset);
+            continue;
+        }
+
+        try seekable_stream.seekTo(initial_pos);
+        var ape_metadata: ?APEMetadata = ape.readFromFooter(allocator, reader, seekable_stream) catch |e| switch (e) {
+            error.OutOfMemory => |err| return err,
+            else => null,
+        };
+        if (ape_metadata != null) {
+            {
+                errdefer ape_metadata.?.deinit();
+                try all_metadata.append(TypedMetadata{ .ape = ape_metadata.? });
+            }
+            try seekable_stream.seekTo(ape_metadata.?.metadata.start_offset);
+            continue;
+        }
+
+        // if we get here, then we're out of valid tag headers to parse
+        break;
+    }
+
+    time_taken = timer.read();
+    std.debug.print("suffixed tags: {}us\n", .{time_taken / time.ns_per_us});
+    timer.reset();
 
     return AllMetadata{
         .allocator = allocator,
-        .all_id3v2 = all_id3v2_metadata,
-        .id3v1 = id3v1_metadata,
-        .flac = flac_metadata,
-        .vorbis = vorbis_metadata,
-        .ape_suffixed = ape_suffixed_metadata,
+        .tags = all_metadata.toOwnedSlice(),
     };
 }
 
+pub const MetadataType = enum {
+    id3v1,
+    id3v2,
+    ape,
+    flac,
+    vorbis,
+};
+
+pub const TypedMetadata = union(MetadataType) {
+    id3v1: Metadata,
+    id3v2: ID3v2Metadata,
+    ape: APEMetadata,
+    flac: Metadata,
+    vorbis: Metadata,
+};
+
 pub const AllMetadata = struct {
     allocator: *Allocator,
-    all_id3v2: ?AllID3v2Metadata,
-    id3v1: ?Metadata,
-    flac: ?Metadata,
-    // TODO: Combine with flac? I don't think there can be
-    //       a file with both Ogg and FLAC vorbis comments
-    vorbis: ?Metadata,
-    ape_suffixed: ?APEMetadata,
+    tags: []TypedMetadata,
 
     pub fn deinit(self: *AllMetadata) void {
-        if (self.all_id3v2) |*all_id3v2| {
-            all_id3v2.deinit();
+        for (self.tags) |*tag| {
+            // using a pointer and then deferencing it allows
+            // the final capture to be non-const
+            // TODO: this feels hacky
+            switch (tag.*) {
+                .id3v1, .flac, .vorbis => |*metadata| {
+                    metadata.deinit();
+                },
+                .id3v2 => |*id3v2_metadata| {
+                    id3v2_metadata.deinit();
+                },
+                .ape => |*ape_metadata| {
+                    ape_metadata.deinit();
+                },
+            }
         }
-        if (self.id3v1) |*id3v1_metadata| {
-            id3v1_metadata.deinit();
-        }
-        if (self.flac) |*flac_metadata| {
-            flac_metadata.deinit();
-        }
-        if (self.vorbis) |*vorbis_metadata| {
-            vorbis_metadata.deinit();
-        }
-        if (self.ape_suffixed) |*ape_metadata| {
-            ape_metadata.deinit();
-        }
+        self.allocator.free(self.tags);
     }
 
     pub fn dump(self: *const AllMetadata) void {
-        if (self.all_id3v2) |all_id3v2| {
-            for (all_id3v2.tags) |*id3v2_meta| {
-                std.debug.print("# ID3v2 v2.{d} 0x{x}-0x{x}\n", .{ id3v2_meta.header.major_version, id3v2_meta.metadata.start_offset, id3v2_meta.metadata.end_offset });
-                id3v2_meta.metadata.map.dump();
+        for (self.tags) |tag| {
+            switch (tag) {
+                .id3v1 => |*id3v1_meta| {
+                    std.debug.print("# ID3v1 0x{x}-0x{x}\n", .{ id3v1_meta.start_offset, id3v1_meta.end_offset });
+                    id3v1_meta.map.dump();
+                },
+                .flac => |*flac_meta| {
+                    std.debug.print("# FLAC 0x{x}-0x{x}\n", .{ flac_meta.start_offset, flac_meta.end_offset });
+                    flac_meta.map.dump();
+                },
+                .vorbis => |*vorbis_meta| {
+                    std.debug.print("# Vorbis 0x{x}-0x{x}\n", .{ vorbis_meta.start_offset, vorbis_meta.end_offset });
+                    vorbis_meta.map.dump();
+                },
+                .id3v2 => |*id3v2_meta| {
+                    std.debug.print("# ID3v2 v2.{d} 0x{x}-0x{x}\n", .{ id3v2_meta.header.major_version, id3v2_meta.metadata.start_offset, id3v2_meta.metadata.end_offset });
+                    id3v2_meta.metadata.map.dump();
+                },
+                .ape => |*ape_meta| {
+                    std.debug.print("# APEv{d} (suffixed) 0x{x}-0x{x}\n", .{ ape_meta.header_or_footer.version, ape_meta.metadata.start_offset, ape_meta.metadata.end_offset });
+                    ape_meta.metadata.map.dump();
+                },
             }
         }
-        if (self.id3v1) |*id3v1_meta| {
-            std.debug.print("# ID3v1 0x{x}-0x{x}\n", .{ id3v1_meta.start_offset, id3v1_meta.end_offset });
-            id3v1_meta.map.dump();
+    }
+
+    // fairly ugly hack to make it easier to translate parse_tests,
+    // TODO: decide if this should exist or not
+    pub fn getAllMetadataOfType(self: AllMetadata, allocator: *Allocator, comptime T: type, comptime tag_type: MetadataType) ![]T {
+        var buf = std.ArrayList(T).init(allocator);
+        defer buf.deinit();
+
+        for (self.tags) |tag| {
+            if (@as(MetadataType, tag) == tag_type) {
+                switch (tag) {
+                    tag_type => |val| {
+                        try buf.append(val);
+                    },
+                    else => unreachable,
+                }
+            }
         }
-        if (self.flac) |*flac_meta| {
-            std.debug.print("# FLAC 0x{x}-0x{x}\n", .{ flac_meta.start_offset, flac_meta.end_offset });
-            flac_meta.map.dump();
-        }
-        if (self.vorbis) |*vorbis_meta| {
-            std.debug.print("# Vorbis 0x{x}-0x{x}\n", .{ vorbis_meta.start_offset, vorbis_meta.end_offset });
-            vorbis_meta.map.dump();
-        }
-        if (self.ape_suffixed) |*ape_meta| {
-            std.debug.print("# APEv{d} (suffixed) 0x{x}-0x{x}\n", .{ ape_meta.header_or_footer.version, ape_meta.metadata.start_offset, ape_meta.metadata.end_offset });
-            ape_meta.metadata.map.dump();
-        }
+
+        return buf.toOwnedSlice();
     }
 };
 
@@ -244,17 +378,24 @@ pub const MetadataMap = struct {
                 break :blk entry;
             } else {
                 var name_dup = try self.allocator.dupe(u8, name);
+                errdefer self.allocator.free(name_dup);
+
                 const entry = try self.name_to_indexes.getOrPutValue(self.allocator, name_dup, IndexList{});
                 break :blk entry;
             }
         };
 
-        const value_dup = try self.allocator.dupe(u8, value);
-        const entry_index = self.entries.items.len;
-        try self.entries.append(self.allocator, Entry{
-            .name = indexes_entry.key_ptr.*,
-            .value = value_dup,
-        });
+        const entry_index = entry_index: {
+            const value_dup = try self.allocator.dupe(u8, value);
+            errdefer self.allocator.free(value_dup);
+
+            const entry_index = self.entries.items.len;
+            try self.entries.append(self.allocator, Entry{
+                .name = indexes_entry.key_ptr.*,
+                .value = value_dup,
+            });
+            break :entry_index entry_index;
+        };
         try indexes_entry.value_ptr.append(self.allocator, entry_index);
     }
 

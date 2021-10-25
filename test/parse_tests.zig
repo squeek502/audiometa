@@ -4,14 +4,18 @@ const AllMetadata = audiometa.metadata.AllMetadata;
 const MetadataEntry = audiometa.metadata.MetadataMap.Entry;
 const testing = std.testing;
 const fmtUtf8SliceEscapeUpper = audiometa.util.fmtUtf8SliceEscapeUpper;
+const Allocator = std.mem.Allocator;
 
-fn parseExpectedMetadata(comptime path: []const u8, expected_meta: ExpectedAllMetadata) !void {
+pub const log_level: std.log.Level = .debug;
+
+fn parseExpectedMetadata(allocator: *Allocator, comptime path: []const u8, expected_meta: ExpectedAllMetadata) !void {
+    std.log.debug("{s}\n", .{path});
     const data = @embedFile(path);
     var stream_source = std.io.StreamSource{ .const_buffer = std.io.fixedBufferStream(data) };
     var meta = try audiometa.metadata.readAll(testing.allocator, &stream_source);
     defer meta.deinit();
 
-    compareAllMetadata(&expected_meta, &meta) catch |err| {
+    compareAllMetadata(allocator, &expected_meta, &meta) catch |err| {
         std.debug.print("\nexpected:\n", .{});
         expected_meta.dump();
         std.debug.print("\nactual:\n", .{});
@@ -20,55 +24,60 @@ fn parseExpectedMetadata(comptime path: []const u8, expected_meta: ExpectedAllMe
     };
 }
 
-fn compareAllMetadata(all_expected: *const ExpectedAllMetadata, all_actual: *const AllMetadata) !void {
+// TODO: Update this to not be garbage, ExpectedAllMetadata should be updated
+// be more similar to AllMetadata
+fn compareAllMetadata(allocator: *Allocator, all_expected: *const ExpectedAllMetadata, all_actual: *const AllMetadata) !void {
+    const all_id3v2_actual = try all_actual.getAllMetadataOfType(allocator, audiometa.metadata.ID3v2Metadata, .id3v2);
+    defer allocator.free(all_id3v2_actual);
+
     if (all_expected.all_id3v2) |all_id3v2_expected| {
-        if (all_actual.all_id3v2) |all_id3v2_actual| {
-            try testing.expectEqual(all_id3v2_expected.len, all_id3v2_actual.tags.len);
-            for (all_id3v2_expected) |id3v2_expected, i| {
-                try testing.expectEqual(id3v2_expected.major_version, all_id3v2_actual.tags[i].header.major_version);
-                try compareMetadata(&id3v2_expected.metadata, &all_id3v2_actual.tags[i].metadata);
-            }
-        } else {
-            return error.MissingID3v2;
+        try testing.expectEqual(all_id3v2_expected.len, all_id3v2_actual.len);
+        for (all_id3v2_expected) |id3v2_expected, i| {
+            try testing.expectEqual(id3v2_expected.major_version, all_id3v2_actual[i].header.major_version);
+            try compareMetadata(&id3v2_expected.metadata, &all_id3v2_actual[i].metadata);
         }
-    } else if (all_actual.all_id3v2 != null) {
+    } else if (all_id3v2_actual.len != 0) {
         return error.UnexpectedID3v2;
     }
+
+    const all_id3v1_actual = try all_actual.getAllMetadataOfType(allocator, audiometa.metadata.Metadata, .id3v1);
+    defer allocator.free(all_id3v1_actual);
+
     if (all_expected.id3v1) |*expected| {
-        if (all_actual.id3v1) |*actual| {
-            return compareMetadata(expected, actual);
-        } else {
-            return error.MissingID3v1;
-        }
-    } else if (all_actual.id3v1 != null) {
+        try testing.expectEqual(@as(usize, 1), all_id3v1_actual.len);
+        return compareMetadata(expected, &all_id3v1_actual[0]);
+    } else if (all_id3v1_actual.len != 0) {
         return error.UnexpectedID3v1;
     }
+
+    const all_flac_actual = try all_actual.getAllMetadataOfType(allocator, audiometa.metadata.Metadata, .flac);
+    defer allocator.free(all_flac_actual);
+
     if (all_expected.flac) |*expected| {
-        if (all_actual.flac) |*actual| {
-            return compareMetadata(expected, actual);
-        } else {
-            return error.MissingFLAC;
-        }
-    } else if (all_actual.flac != null) {
+        try testing.expectEqual(@as(usize, 1), all_flac_actual.len);
+        return compareMetadata(expected, &all_flac_actual[0]);
+    } else if (all_flac_actual.len != 0) {
         return error.UnexpectedFLAC;
     }
+
+    const all_vorbis_actual = try all_actual.getAllMetadataOfType(allocator, audiometa.metadata.Metadata, .vorbis);
+    defer allocator.free(all_vorbis_actual);
+
     if (all_expected.vorbis) |*expected| {
-        if (all_actual.vorbis) |*actual| {
-            return compareMetadata(expected, actual);
-        } else {
-            return error.MissingVorbis;
-        }
-    } else if (all_actual.vorbis != null) {
+        try testing.expectEqual(@as(usize, 1), all_vorbis_actual.len);
+        return compareMetadata(expected, &all_vorbis_actual[0]);
+    } else if (all_vorbis_actual.len != 0) {
         return error.UnexpectedVorbis;
     }
+
+    const all_ape_actual = try all_actual.getAllMetadataOfType(allocator, audiometa.metadata.APEMetadata, .ape);
+    defer allocator.free(all_ape_actual);
+
     if (all_expected.ape_suffixed) |*expected| {
-        if (all_actual.ape_suffixed) |*actual| {
-            try testing.expectEqual(expected.version, actual.header_or_footer.version);
-            return compareMetadata(&expected.metadata, &actual.metadata);
-        } else {
-            return error.MissingAPE;
-        }
-    } else if (all_actual.ape_suffixed != null) {
+        try testing.expectEqual(@as(usize, 1), all_ape_actual.len);
+        try testing.expectEqual(expected.version, all_ape_actual[0].header_or_footer.version);
+        return compareMetadata(&expected.metadata, &all_ape_actual[0].metadata);
+    } else if (all_ape_actual.len != 0) {
         return error.UnexpectedAPE;
     }
 }
@@ -153,7 +162,7 @@ const ExpectedMetadata = struct {
 };
 
 test "standard id3v1" {
-    try parseExpectedMetadata("data/id3v1.mp3", .{
+    try parseExpectedMetadata(testing.allocator, "data/id3v1.mp3", .{
         .id3v1 = .{
             .start_offset = 0x0,
             .end_offset = 0x80,
@@ -169,7 +178,7 @@ test "standard id3v1" {
 }
 
 test "empty (all zeros) id3v1" {
-    try parseExpectedMetadata("data/id3v1_empty.mp3", .{
+    try parseExpectedMetadata(testing.allocator, "data/id3v1_empty.mp3", .{
         .id3v1 = .{
             .start_offset = 0x0,
             .end_offset = 0x80,
@@ -181,7 +190,7 @@ test "empty (all zeros) id3v1" {
 }
 
 test "id3v1 with non-ASCII chars (latin1)" {
-    try parseExpectedMetadata("data/id3v1_latin1_chars.mp3", .{
+    try parseExpectedMetadata(testing.allocator, "data/id3v1_latin1_chars.mp3", .{
         .id3v1 = .{
             .start_offset = 0x0,
             .end_offset = 0x80,
@@ -197,7 +206,7 @@ test "id3v1 with non-ASCII chars (latin1)" {
 }
 
 test "id3v2.3 with UTF-16" {
-    try parseExpectedMetadata("data/id3v2.3.mp3", .{
+    try parseExpectedMetadata(testing.allocator, "data/id3v2.3.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
             .{
                 .major_version = 3,
@@ -234,7 +243,7 @@ test "id3v2.3 with UTF-16" {
 }
 
 test "id3v2.3 with UTF-16 big endian" {
-    try parseExpectedMetadata("data/id3v2.3_utf16_be.mp3", .{
+    try parseExpectedMetadata(testing.allocator, "data/id3v2.3_utf16_be.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
             .{
                 .major_version = 3,
@@ -258,7 +267,7 @@ test "id3v2.3 with UTF-16 big endian" {
 }
 
 test "id3v2.3 with user defined fields (TXXX)" {
-    try parseExpectedMetadata("data/id3v2.3_user_defined_fields.mp3", .{
+    try parseExpectedMetadata(testing.allocator, "data/id3v2.3_user_defined_fields.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
             .{
                 .major_version = 3,
@@ -288,7 +297,7 @@ test "id3v2.3 with user defined fields (TXXX)" {
 }
 
 test "id3v2.3 with full unsynch tag" {
-    try parseExpectedMetadata("data/id3v2.3_unsynch_tag.mp3", .{
+    try parseExpectedMetadata(testing.allocator, "data/id3v2.3_unsynch_tag.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
             .{
                 .major_version = 3,
@@ -312,7 +321,7 @@ test "id3v2.3 with full unsynch tag" {
 }
 
 test "id3v2.3 with id3v2.2 frame ids" {
-    try parseExpectedMetadata("data/id3v2.3_with_id3v2.2_frame_ids.mp3", .{
+    try parseExpectedMetadata(testing.allocator, "data/id3v2.3_with_id3v2.2_frame_ids.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
             .{
                 .major_version = 3,
@@ -336,7 +345,7 @@ test "id3v2.3 with id3v2.2 frame ids" {
 }
 
 test "id3v2.3 with text frame with zero size" {
-    try parseExpectedMetadata("data/id3v2.3_text_frame_with_zero_size.mp3", .{
+    try parseExpectedMetadata(testing.allocator, "data/id3v2.3_text_frame_with_zero_size.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
             .{
                 .major_version = 3,
@@ -362,7 +371,7 @@ test "id3v2.3 with text frame with zero size" {
 }
 
 test "id3v2.2" {
-    try parseExpectedMetadata("data/id3v2.2.mp3", .{
+    try parseExpectedMetadata(testing.allocator, "data/id3v2.2.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
             .{
                 .major_version = 2,
@@ -383,7 +392,7 @@ test "id3v2.2" {
 }
 
 test "id3v2.4 utf16 frames with single u8 delimeters" {
-    try parseExpectedMetadata("data/id3v2.4_utf16_single_u8_delimeter.mp3", .{
+    try parseExpectedMetadata(testing.allocator, "data/id3v2.4_utf16_single_u8_delimeter.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
             .{
                 .major_version = 4,
@@ -412,7 +421,7 @@ test "id3v2.4 utf16 frames with single u8 delimeters" {
 }
 
 test "id3v2.3 zero size frame" {
-    try parseExpectedMetadata("data/id3v2.3_zero_size_frame.mp3", .{
+    try parseExpectedMetadata(testing.allocator, "data/id3v2.3_zero_size_frame.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
             .{
                 .major_version = 3,
@@ -439,7 +448,7 @@ test "id3v2.3 zero size frame" {
 }
 
 test "id3v2.4 non-synchsafe frame size" {
-    try parseExpectedMetadata("data/id3v2.4_non_synchsafe_frame_size.mp3", .{
+    try parseExpectedMetadata(testing.allocator, "data/id3v2.4_non_synchsafe_frame_size.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
             .{
                 .major_version = 4,
@@ -462,7 +471,7 @@ test "id3v2.4 non-synchsafe frame size" {
 }
 
 test "id3v2.4 extended header with crc" {
-    try parseExpectedMetadata("data/id3v2.4_extended_header_crc.mp3", .{
+    try parseExpectedMetadata(testing.allocator, "data/id3v2.4_extended_header_crc.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
             .{
                 .major_version = 4,
@@ -481,7 +490,7 @@ test "id3v2.4 extended header with crc" {
 }
 
 test "normal flac" {
-    try parseExpectedMetadata("data/flac.flac", .{
+    try parseExpectedMetadata(testing.allocator, "data/flac.flac", .{
         .all_id3v2 = null,
         .id3v1 = null,
         .flac = .{
@@ -506,7 +515,7 @@ test "normal flac" {
 }
 
 test "flac with multiple date fields" {
-    try parseExpectedMetadata("data/flac_multiple_dates.flac", .{
+    try parseExpectedMetadata(testing.allocator, "data/flac_multiple_dates.flac", .{
         .all_id3v2 = null,
         .id3v1 = null,
         .flac = .{
@@ -535,7 +544,7 @@ test "flac with multiple date fields" {
 }
 
 test "id3v2.4 unsynch text frames" {
-    try parseExpectedMetadata("data/id3v2.4_unsynch_text_frames.mp3", .{
+    try parseExpectedMetadata(testing.allocator, "data/id3v2.4_unsynch_text_frames.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
             .{
                 .major_version = 4,
@@ -559,7 +568,7 @@ test "id3v2.4 unsynch text frames" {
 }
 
 test "id3v2.3 malformed TXXX" {
-    try parseExpectedMetadata("data/id3v2.3_malformed_txxx.mp3", .{
+    try parseExpectedMetadata(testing.allocator, "data/id3v2.3_malformed_txxx.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
             .{
                 .major_version = 3,
@@ -574,7 +583,7 @@ test "id3v2.3 malformed TXXX" {
 }
 
 test "id3v2.4 malformed TXXX" {
-    try parseExpectedMetadata("data/id3v2.4_malformed_txxx.mp3", .{
+    try parseExpectedMetadata(testing.allocator, "data/id3v2.4_malformed_txxx.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
             .{
                 .major_version = 4,
@@ -592,7 +601,7 @@ test "id3v2.3 unsynch tag edge case" {
     // Found via fuzzing. Has a full unsynch tag that has an end frame header with
     // unsynch bytes that extends to the end of the tag. This can trigger an
     // usize underflow if it's not protected against properly.
-    try parseExpectedMetadata("data/id3v2.3_unsynch_tag_edge_case.mp3", .{
+    try parseExpectedMetadata(testing.allocator, "data/id3v2.3_unsynch_tag_edge_case.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
             .{
                 .major_version = 3,
@@ -607,7 +616,7 @@ test "id3v2.3 unsynch tag edge case" {
 }
 
 test "ogg" {
-    try parseExpectedMetadata("data/vorbis.ogg", .{
+    try parseExpectedMetadata(testing.allocator, "data/vorbis.ogg", .{
         .vorbis = ExpectedMetadata{
             .start_offset = 0x6d,
             .end_offset = 0x10e,
@@ -624,7 +633,7 @@ test "ogg" {
 }
 
 test "ogg with vorbis comment data spanning multiple pages" {
-    try parseExpectedMetadata("data/vorbis_comment_spanning_pages.ogg", .{
+    try parseExpectedMetadata(testing.allocator, "data/vorbis_comment_spanning_pages.ogg", .{
         .vorbis = ExpectedMetadata{
             .start_offset = 0x5d,
             .end_offset = 0x11a,
@@ -641,7 +650,7 @@ test "ogg with vorbis comment data spanning multiple pages" {
 }
 
 test "ape" {
-    try parseExpectedMetadata("data/ape.mp3", .{
+    try parseExpectedMetadata(testing.allocator, "data/ape.mp3", .{
         .ape_suffixed = ExpectedAPEMetadata{
             .version = 2000,
             .metadata = .{
@@ -659,7 +668,7 @@ test "ape" {
 }
 
 test "ape with id3v2 and id3v1 tags" {
-    try parseExpectedMetadata("data/ape_and_id3.mp3", .{
+    try parseExpectedMetadata(testing.allocator, "data/ape_and_id3.mp3", .{
         .all_id3v2 = &[_]ExpectedID3v2Metadata{
             .{
                 .major_version = 3,

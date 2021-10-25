@@ -348,7 +348,128 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
     }
 }
 
-pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !AllID3v2Metadata {
+pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !ID3v2Metadata {
+    const start_offset = try seekable_stream.getPos();
+    const id3_header = try ID3Header.read(reader);
+
+    const end_offset = start_offset + ID3Header.len + id3_header.size;
+    if (end_offset > try seekable_stream.getEndPos()) {
+        return error.EndOfStream;
+    }
+
+    var metadata_id3v2_container = ID3v2Metadata.init(allocator, id3_header, start_offset, end_offset);
+    errdefer metadata_id3v2_container.deinit();
+    var metadata = &metadata_id3v2_container.metadata;
+
+    // ID3v2.2 compression should just be skipped according to the spec
+    if (id3_header.compressed()) {
+        try seekable_stream.seekTo(end_offset);
+        return metadata_id3v2_container;
+    }
+
+    // Unsynchronisation is weird. As I understand it:
+    //
+    // For ID3v2.3:
+    // - Either *all* of a tag has been unsynched or none of it has (the tag header
+    //   itself has an 'unsynch' flag)
+    // - The full tag size is the final size (after unsynchronization), but all data
+    //   within the tag is set *before* synchronization, so that means all
+    //   extra bytes added by unsynchronization must be skipped during decoding
+    //  + The spec is fairly unclear about the order of operations here, but this
+    //    seems to be the case for all of the unsynch 2.3 files in my collection
+    // - Frame sizes are not written as synchsafe integers, so the size itself must
+    //   be decoded and extra bytes must be ignored while reading it
+    // This means that for ID3v2.3, unsynch tags should discard all extra bytes while
+    // reading the tag (i.e. if a frame size is 4, you should read *at least* 4 bytes,
+    // skipping over any extra bytes added by unsynchronization; the decoded size
+    // will match the given frame size)
+    //
+    // For ID3v2.4:
+    // - Frame headers use synchsafe integers and therefore the frame headers
+    //   are guaranteed to be synchsafe.
+    // - ID3v2.4 doesn't have a tag-wide 'unsynch' flag and instead frames have
+    //   an 'unsynch' flag.
+    // - ID3v2.4 spec states: 'size descriptor [contains] the size of
+    //   the data in the final frame, after encryption, compression and
+    //   unsynchronisation'
+    // This means that for ID3v2.4, unsynch frames should be read using the given size
+    // and then decoded (i.e. if size is 4, you should read 4 bytes and then decode them;
+    // the decoded size could end up being smaller)
+    const tag_unsynch = id3_header.unsynchronised();
+    const should_read_and_then_decode = id3_header.major_version >= 4;
+    const should_read_unsynch = tag_unsynch and !should_read_and_then_decode;
+    var unsynch_reader = unsynch.unsynchCapableReader(should_read_unsynch, reader);
+    var unsynch_capable_reader = unsynch_reader.reader();
+
+    // Slightly hacky solution for trailing garbage/padding bytes at the end of the tag. Instead of
+    // trying to read a tag that we know is invalid (since frame size has to be > 0
+    // excluding the header), we can stop reading once there's not enough space left for
+    // a valid tag to be read.
+    const tag_end_with_enough_space_for_valid_frame: usize = metadata.end_offset - FrameHeader.len(id3_header.major_version);
+
+    // Skip past extended header if it exists
+    if (id3_header.hasExtendedHeader()) {
+        const extended_header_size: u32 = try unsynch_capable_reader.readIntBig(u32);
+        // In ID3v2.4, extended header size is a synchsafe integer and includes the size bytes
+        // in its reported size. In earlier versions, it is not synchsafe and excludes the size bytes.
+        const remaining_extended_header_size = remaining: {
+            if (id3_header.major_version >= 4) {
+                const synchsafe_extended_header_size = synchsafe.decode(u32, extended_header_size);
+                if (synchsafe_extended_header_size < 4) {
+                    return error.InvalidExtendedHeaderSize;
+                }
+                break :remaining synchsafe_extended_header_size - 4;
+            }
+            break :remaining extended_header_size;
+        };
+        if ((try seekable_stream.getPos()) + remaining_extended_header_size > tag_end_with_enough_space_for_valid_frame) {
+            return error.InvalidExtendedHeaderSize;
+        }
+        try seekable_stream.seekBy(remaining_extended_header_size);
+    }
+
+    var cur_pos = try seekable_stream.getPos();
+    while (cur_pos < tag_end_with_enough_space_for_valid_frame) : (cur_pos = try seekable_stream.getPos()) {
+        var frame_header = try FrameHeader.read(unsynch_capable_reader, id3_header.major_version);
+
+        var frame_data_start_pos = try seekable_stream.getPos();
+        // It's possible for full unsynch tags to advance the position more than
+        // the frame header length since the header itself is decoded while it's
+        // read. If we read such that `frame_data_start_pos > metadata.end_offset`,
+        // then treat it as 0 remaining size.
+        var remaining_tag_size = std.math.sub(usize, metadata.end_offset, frame_data_start_pos) catch 0;
+
+        // validate frame_header and bail out if its too crazy
+        frame_header.validate(id3_header.major_version, remaining_tag_size) catch {
+            try seekable_stream.seekTo(metadata.end_offset);
+            break;
+        };
+
+        readFrame(allocator, unsynch_capable_reader, seekable_stream, &metadata_id3v2_container, &frame_header, remaining_tag_size, unsynch_reader.unsynch) catch |e| switch (e) {
+            // Errors within the frame can be recovered from by skipping the frame
+            error.InvalidTextEncodingByte,
+            error.ZeroSizeFrame,
+            error.InvalidUTF16BOM,
+            error.UnexpectedTextDataEnd,
+            error.InvalidUserDefinedTextFrame,
+            error.InvalidUTF16Data,
+            => {
+                // This is a bit weird, but go back to the start of the frame and then
+                // skip forward. This ensures that we correctly skip the frame in all
+                // circumstances (partially read, full unsynch, etc)
+                try frame_header.skipDataFromPos(frame_data_start_pos, unsynch_capable_reader, seekable_stream, unsynch_reader.unsynch);
+                continue;
+            },
+            else => |err| return err,
+        };
+    }
+
+    return metadata_id3v2_container;
+}
+
+/// Untested, probably no real reason to keep around
+/// TODO: probably remove
+pub fn readAll(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !AllID3v2Metadata {
     var metadata_buf = std.ArrayList(ID3v2Metadata).init(allocator);
     errdefer {
         for (metadata_buf.items) |*meta| {
@@ -360,8 +481,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !A
     var is_duplicate_tag = false;
 
     while (true) : (is_duplicate_tag = true) {
-        const start_offset = try seekable_stream.getPos();
-        const id3_header = ID3Header.read(reader) catch |e| switch (e) {
+        var id3v2_meta = read(allocator, reader, seekable_stream) catch |e| switch (e) {
             error.EndOfStream, error.InvalidIdentifier => |err| {
                 if (is_duplicate_tag) {
                     break;
@@ -371,117 +491,9 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !A
             },
             else => |err| return err,
         };
+        errdefer id3v2_meta.deinit();
 
-        const end_offset = start_offset + ID3Header.len + id3_header.size;
-        if (end_offset > try seekable_stream.getEndPos()) {
-            return error.EndOfStream;
-        }
-        try metadata_buf.append(ID3v2Metadata.init(allocator, id3_header, start_offset, end_offset));
-        var metadata_id3v2_container = &metadata_buf.items[metadata_buf.items.len - 1];
-        var metadata = &metadata_id3v2_container.metadata;
-
-        // ID3v2.2 compression should just be skipped according to the spec
-        if (id3_header.compressed()) {
-            try seekable_stream.seekTo(end_offset);
-            continue;
-        }
-
-        // Unsynchronisation is weird. As I understand it:
-        //
-        // For ID3v2.3:
-        // - Either *all* of a tag has been unsynched or none of it has (the tag header
-        //   itself has an 'unsynch' flag)
-        // - The full tag size is the final size (after unsynchronization), but all data
-        //   within the tag is set *before* synchronization, so that means all
-        //   extra bytes added by unsynchronization must be skipped during decoding
-        //  + The spec is fairly unclear about the order of operations here, but this
-        //    seems to be the case for all of the unsynch 2.3 files in my collection
-        // - Frame sizes are not written as synchsafe integers, so the size itself must
-        //   be decoded and extra bytes must be ignored while reading it
-        // This means that for ID3v2.3, unsynch tags should discard all extra bytes while
-        // reading the tag (i.e. if a frame size is 4, you should read *at least* 4 bytes,
-        // skipping over any extra bytes added by unsynchronization; the decoded size
-        // will match the given frame size)
-        //
-        // For ID3v2.4:
-        // - Frame headers use synchsafe integers and therefore the frame headers
-        //   are guaranteed to be synchsafe.
-        // - ID3v2.4 doesn't have a tag-wide 'unsynch' flag and instead frames have
-        //   an 'unsynch' flag.
-        // - ID3v2.4 spec states: 'size descriptor [contains] the size of
-        //   the data in the final frame, after encryption, compression and
-        //   unsynchronisation'
-        // This means that for ID3v2.4, unsynch frames should be read using the given size
-        // and then decoded (i.e. if size is 4, you should read 4 bytes and then decode them;
-        // the decoded size could end up being smaller)
-        const tag_unsynch = id3_header.unsynchronised();
-        const should_read_and_then_decode = id3_header.major_version >= 4;
-        const should_read_unsynch = tag_unsynch and !should_read_and_then_decode;
-        var unsynch_reader = unsynch.unsynchCapableReader(should_read_unsynch, reader);
-        var unsynch_capable_reader = unsynch_reader.reader();
-
-        // Slightly hacky solution for trailing garbage/padding bytes at the end of the tag. Instead of
-        // trying to read a tag that we know is invalid (since frame size has to be > 0
-        // excluding the header), we can stop reading once there's not enough space left for
-        // a valid tag to be read.
-        const tag_end_with_enough_space_for_valid_frame: usize = metadata.end_offset - FrameHeader.len(id3_header.major_version);
-
-        // Skip past extended header if it exists
-        if (id3_header.hasExtendedHeader()) {
-            const extended_header_size: u32 = try unsynch_capable_reader.readIntBig(u32);
-            // In ID3v2.4, extended header size is a synchsafe integer and includes the size bytes
-            // in its reported size. In earlier versions, it is not synchsafe and excludes the size bytes.
-            const remaining_extended_header_size = remaining: {
-                if (id3_header.major_version >= 4) {
-                    const synchsafe_extended_header_size = synchsafe.decode(u32, extended_header_size);
-                    if (synchsafe_extended_header_size < 4) {
-                        return error.InvalidExtendedHeaderSize;
-                    }
-                    break :remaining synchsafe_extended_header_size - 4;
-                }
-                break :remaining extended_header_size;
-            };
-            if ((try seekable_stream.getPos()) + remaining_extended_header_size > tag_end_with_enough_space_for_valid_frame) {
-                return error.InvalidExtendedHeaderSize;
-            }
-            try seekable_stream.seekBy(remaining_extended_header_size);
-        }
-
-        var cur_pos = try seekable_stream.getPos();
-        while (cur_pos < tag_end_with_enough_space_for_valid_frame) : (cur_pos = try seekable_stream.getPos()) {
-            var frame_header = try FrameHeader.read(unsynch_capable_reader, id3_header.major_version);
-
-            var frame_data_start_pos = try seekable_stream.getPos();
-            // It's possible for full unsynch tags to advance the position more than
-            // the frame header length since the header itself is decoded while it's
-            // read. If we read such that `frame_data_start_pos > metadata.end_offset`,
-            // then treat it as 0 remaining size.
-            var remaining_tag_size = std.math.sub(usize, metadata.end_offset, frame_data_start_pos) catch 0;
-
-            // validate frame_header and bail out if its too crazy
-            frame_header.validate(id3_header.major_version, remaining_tag_size) catch {
-                try seekable_stream.seekTo(metadata.end_offset);
-                break;
-            };
-
-            readFrame(allocator, unsynch_capable_reader, seekable_stream, metadata_id3v2_container, &frame_header, remaining_tag_size, unsynch_reader.unsynch) catch |e| switch (e) {
-                // Errors within the frame can be recovered from by skipping the frame
-                error.InvalidTextEncodingByte,
-                error.ZeroSizeFrame,
-                error.InvalidUTF16BOM,
-                error.UnexpectedTextDataEnd,
-                error.InvalidUserDefinedTextFrame,
-                error.InvalidUTF16Data,
-                => {
-                    // This is a bit weird, but go back to the start of the frame and then
-                    // skip forward. This ensures that we correctly skip the frame in all
-                    // circumstances (partially read, full unsynch, etc)
-                    try frame_header.skipDataFromPos(frame_data_start_pos, unsynch_capable_reader, seekable_stream, unsynch_reader.unsynch);
-                    continue;
-                },
-                else => |err| return err,
-            };
-        }
+        try metadata_buf.append(id3v2_meta);
     }
 
     return AllID3v2Metadata{

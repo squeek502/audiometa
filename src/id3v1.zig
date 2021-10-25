@@ -11,13 +11,14 @@ const latin1ToUtf8 = @import("latin1.zig").latin1ToUtf8;
 pub const id3v1_identifier = "TAG";
 pub const tag_size = 128;
 
+/// Assumes the stream cursor is at the end of the ID3v1 tag
 pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !Metadata {
     var metadata: Metadata = Metadata.init(allocator);
     errdefer metadata.deinit();
 
     var metadata_map = &metadata.map;
 
-    var end_pos = try seekable_stream.getEndPos();
+    var end_pos = try seekable_stream.getPos();
     if (end_pos < tag_size) {
         return error.EndOfStream;
     }

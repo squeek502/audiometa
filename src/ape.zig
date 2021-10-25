@@ -78,11 +78,15 @@ pub fn readFromHeader(allocator: *Allocator, reader: anytype, seekable_stream: a
     const header = try APEHeader.read(reader);
     const end_offset = start_offset + APEHeader.len + header.tag_size;
 
+    if (end_offset > try seekable_stream.getEndPos()) {
+        return error.EndOfStream;
+    }
+
     var ape_metadata = APEMetadata.init(allocator, header, start_offset, end_offset);
     errdefer ape_metadata.deinit();
 
     const footer_size = if (header.flags.hasFooter()) APEHeader.len else 0;
-    const end_of_items_offset = ape_metadata.end_offset - footer_size;
+    const end_of_items_offset = ape_metadata.metadata.end_offset - footer_size;
 
     try readItems(allocator, reader, seekable_stream, &ape_metadata, end_of_items_offset);
 
@@ -101,22 +105,13 @@ pub fn readFromFooter(allocator: *Allocator, reader: anytype, seekable_stream: a
     }
 
     try seekable_stream.seekBy(-@intCast(i64, APEHeader.len));
-    var maybe_footer: ?APEHeader = APEHeader.read(reader) catch |e| switch (e) {
-        error.EndOfStream => |err| return err,
-        else => null,
-    };
+    const footer = try APEHeader.read(reader);
 
-    if (maybe_footer == null) {
-        if (end_pos < id3v1.tag_size + APEHeader.len) {
-            return error.EndOfStream;
-        }
-        try seekable_stream.seekTo(end_pos - (id3v1.tag_size + APEHeader.len));
-        maybe_footer = try APEHeader.read(reader);
+    // the size is meant to include the footer, so if it doesn't
+    // have room for the footer we just read, it's invalid
+    if (footer.tag_size < APEHeader.len) {
+        return error.InvalidSize;
     }
-
-    // maybe_footer has to be non-null here since we would have returned with
-    // an error before we got here if a footer wasn't found
-    const footer = maybe_footer.?;
 
     var ape_metadata = APEMetadata.init(allocator, footer, 0, 0);
     errdefer ape_metadata.deinit();
