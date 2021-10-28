@@ -79,7 +79,17 @@ pub fn build(b: *std.build.Builder) void {
     // Fuzz
 
     _ = addFuzzer(b, "fuzz", &.{}) catch unreachable;
-    _ = addFuzzer(b, "fuzz-oom", &.{}) catch unreachable;
+
+    var fuzz_oom = addFuzzer(b, "fuzz-oom", &.{}) catch unreachable;
+    // setup build options
+    {
+        const debug_options = b.addOptions();
+        debug_options.addOption(bool, "is_zig_debug_version", true);
+        fuzz_oom.debug_exe.addOptions("build_options", debug_options);
+        const afl_options = b.addOptions();
+        afl_options.addOption(bool, "is_zig_debug_version", false);
+        fuzz_oom.lib.addOptions("build_options", afl_options);
+    }
 }
 
 fn addFuzzer(b: *std.build.Builder, comptime name: []const u8, afl_clang_args: []const []const u8) !FuzzerSteps {
