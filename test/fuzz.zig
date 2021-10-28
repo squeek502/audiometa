@@ -18,16 +18,17 @@ pub fn zigMain() !void {
     defer allocator.free(data);
     var stream_source = std.io.StreamSource{ .buffer = std.io.fixedBufferStream(data) };
 
-    // default to 4mb just incase we get very small files that need to allocate
+    // default to 4mb minimum just incase we get very small files that need to allocate
     // fairly large sizes for things like ArrayList(ID3v2Metadata)
-    var max_size_allocator = &(MaxSizeAllocator.init(allocator, std.math.max(4096, data.len * 10)).allocator);
+    const max_allocation_size = std.math.max(4096, data.len * 10);
+    var max_size_allocator = &(MaxSizeAllocator.init(allocator, max_allocation_size).allocator);
 
     var metadata = try audiometa.metadata.readAll(max_size_allocator, &stream_source);
     defer metadata.deinit();
 }
 
 /// Allocator that checks that individual allocations never go over
-/// a certain size
+/// a certain size, and panics if they ever do
 const MaxSizeAllocator = struct {
     allocator: Allocator,
     parent_allocator: *Allocator,
@@ -46,13 +47,7 @@ const MaxSizeAllocator = struct {
         };
     }
 
-    fn alloc(
-        allocator: *Allocator,
-        len: usize,
-        ptr_align: u29,
-        len_align: u29,
-        ra: usize,
-    ) error{OutOfMemory}![]u8 {
+    fn alloc(allocator: *Allocator, len: usize, ptr_align: u29, len_align: u29, ra: usize) error{OutOfMemory}![]u8 {
         const self = @fieldParentPtr(Self, "allocator", allocator);
         if (len > self.max_alloc_size) {
             std.debug.print("trying to allocate size: {}\n", .{len});
@@ -61,14 +56,7 @@ const MaxSizeAllocator = struct {
         return self.parent_allocator.allocFn(self.parent_allocator, len, ptr_align, len_align, ra);
     }
 
-    fn resize(
-        allocator: *Allocator,
-        buf: []u8,
-        buf_align: u29,
-        new_len: usize,
-        len_align: u29,
-        ra: usize,
-    ) error{OutOfMemory}!usize {
+    fn resize(allocator: *Allocator, buf: []u8, buf_align: u29, new_len: usize, len_align: u29, ra: usize) error{OutOfMemory}!usize {
         const self = @fieldParentPtr(Self, "allocator", allocator);
         if (new_len > self.max_alloc_size) {
             std.debug.print("trying to resize to size: {}\n", .{new_len});

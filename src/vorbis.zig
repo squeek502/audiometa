@@ -21,6 +21,8 @@ pub const PacketType = enum(u8) {
 const fresh_packet = 0x00;
 const first_page_of_logical_bitstream = 0x02;
 
+/// Note: It is up to the caller to set metadata start/end offsets, those are not
+/// set within this function
 pub fn readComment(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !Metadata {
     var metadata: Metadata = Metadata.init(allocator);
     errdefer metadata.deinit();

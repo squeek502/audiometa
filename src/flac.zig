@@ -44,7 +44,6 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
 
             var fixed_buffer_stream = std.io.fixedBufferStream(comments);
 
-            // There can only be one comment block per stream, so we can return here
             var metadata = vorbis.readComment(allocator, fixed_buffer_stream.reader(), fixed_buffer_stream.seekableStream()) catch |e| switch (e) {
                 error.EndOfStream => return error.EndOfCommentBlock,
                 else => |err| return err,
@@ -54,6 +53,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !M
             metadata.start_offset = start_offset;
             metadata.end_offset = end_offset;
 
+            // There can only be one comment block per stream, so we can return here
             return metadata;
         } else {
             // skipping bytes in the reader actually reads the bytes which is a
