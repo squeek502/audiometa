@@ -1,6 +1,6 @@
 # audiometa
 
-An audio metadata/tag reader (currently supports ID3v2, ID3v1, FLAC, APE, Ogg Vorbis) written in [Zig](https://ziglang.org/).
+An audio metadata/tag reading library (currently supports ID3v2, ID3v1, FLAC, APE, Ogg Vorbis) written in [Zig](https://ziglang.org/).
 
 **still heavily work-in-progress, everything is subject to change**
 
