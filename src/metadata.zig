@@ -44,7 +44,7 @@ pub fn readAll(allocator: *Allocator, stream_source: *std.io.StreamSource) !AllM
     std.debug.print("setup: {}us\n", .{time_taken / time.ns_per_us});
     timer.reset();
 
-    // TODO: this won't handle id3v2 tags at the end of a file or when a SEEK frame is used
+    // TODO: this won't handle id3v2 when a SEEK frame is used
 
     while (true) {
         const initial_pos = try seekable_stream.getPos();
@@ -153,6 +153,20 @@ pub fn readAll(allocator: *Allocator, stream_source: *std.io.StreamSource) !AllM
                 try all_metadata.append(TypedMetadata{ .ape = ape_metadata.? });
             }
             try seekable_stream.seekTo(ape_metadata.?.metadata.start_offset);
+            continue;
+        }
+
+        try seekable_stream.seekTo(initial_pos);
+        var id3v2_metadata: ?ID3v2Metadata = id3v2.readFromFooter(allocator, reader, seekable_stream) catch |e| switch (e) {
+            error.OutOfMemory => |err| return err,
+            else => null,
+        };
+        if (id3v2_metadata != null) {
+            {
+                errdefer id3v2_metadata.?.deinit();
+                try all_metadata.append(TypedMetadata{ .id3v2 = id3v2_metadata.? });
+            }
+            try seekable_stream.seekTo(id3v2_metadata.?.metadata.start_offset);
             continue;
         }
 

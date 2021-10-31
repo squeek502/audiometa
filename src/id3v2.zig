@@ -484,6 +484,29 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !I
     return metadata_id3v2_container;
 }
 
+/// Expects the seekable_stream position to be at the end of the footer that is being read.
+pub fn readFromFooter(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !ID3v2Metadata {
+    var end_pos = try seekable_stream.getPos();
+    if (end_pos < ID3Header.len) {
+        return error.EndOfStream;
+    }
+
+    try seekable_stream.seekBy(-@intCast(i64, ID3Header.len));
+    const footer = try ID3Header.readFooter(reader);
+
+    // header len + size + footer len
+    const full_tag_size = ID3Header.len + footer.size + ID3Header.len;
+
+    if (end_pos < full_tag_size) {
+        return error.EndOfStream;
+    }
+
+    const start_of_header = end_pos - full_tag_size;
+    try seekable_stream.seekTo(start_of_header);
+
+    return read(allocator, reader, seekable_stream);
+}
+
 /// Untested, probably no real reason to keep around
 /// TODO: probably remove
 pub fn readAll(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !AllID3v2Metadata {

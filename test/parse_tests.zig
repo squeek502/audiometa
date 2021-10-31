@@ -508,6 +508,25 @@ test "id3v2.4 footer" {
     });
 }
 
+test "id3v2.4 appended tag" {
+    try parseExpectedMetadata(testing.allocator, "data/id3v2.4_appended.mp3", .{
+        .all_id3v2 = &[_]ExpectedID3v2Metadata{
+            .{
+                .major_version = 4,
+                .metadata = .{
+                    .start_offset = 0x18,
+                    .end_offset = 0x75,
+                    .map = &[_]MetadataEntry{
+                        .{ .name = "TIT2", .value = "Test" },
+                        .{ .name = "TPE1", .value = "Test2" },
+                        .{ .name = "TPE2", .value = "Test2" },
+                    },
+                },
+            },
+        },
+    });
+}
+
 test "normal flac" {
     try parseExpectedMetadata(testing.allocator, "data/flac.flac", .{
         .all_id3v2 = null,
