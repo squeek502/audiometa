@@ -9,18 +9,31 @@ const AllID3v2Metadata = @import("metadata.zig").AllID3v2Metadata;
 const ID3v2Metadata = @import("metadata.zig").ID3v2Metadata;
 
 pub const id3v2_identifier = "ID3";
+pub const id3v2_footer_identifier = "3DI";
 
 pub const ID3Header = struct {
     major_version: u8,
     revision_num: u8,
     flags: u8,
+    /// Includes the size of the extended header, the padding, and the frames
+    /// after unsynchronization. Does not include the header or the footer (if
+    /// present).
     size: synchsafe.DecodedType(u32),
 
     pub const len: usize = 10;
 
     pub fn read(reader: anytype) !ID3Header {
+        return readWithIdentifier(reader, id3v2_identifier);
+    }
+
+    pub fn readFooter(reader: anytype) !ID3Header {
+        return readWithIdentifier(reader, id3v2_footer_identifier);
+    }
+
+    fn readWithIdentifier(reader: anytype, comptime identifier: []const u8) !ID3Header {
+        assert(identifier.len == 3);
         const header = try reader.readBytesNoEof(ID3Header.len);
-        if (!std.mem.eql(u8, header[0..3], id3v2_identifier)) {
+        if (!std.mem.eql(u8, header[0..3], identifier)) {
             return error.InvalidIdentifier;
         }
         const synchsafe_size = std.mem.readIntSliceBig(u32, header[6..10]);
@@ -40,7 +53,6 @@ pub const ID3Header = struct {
         return self.major_version >= 3 and self.flags & (1 << 6) != 0;
     }
 
-    // TODO: handle footers
     pub fn hasFooter(self: *const ID3Header) bool {
         return self.major_version >= 4 and self.flags & (1 << 4) != 0;
     }
@@ -352,7 +364,8 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !I
     const start_offset = try seekable_stream.getPos();
     const id3_header = try ID3Header.read(reader);
 
-    const end_offset = start_offset + ID3Header.len + id3_header.size;
+    const footer_size = if (id3_header.hasFooter()) ID3Header.len else 0;
+    const end_offset = start_offset + ID3Header.len + id3_header.size + footer_size;
     if (end_offset > try seekable_stream.getEndPos()) {
         return error.EndOfStream;
     }
@@ -462,6 +475,10 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !I
             },
             else => |err| return err,
         };
+    }
+
+    if (id3_header.hasFooter()) {
+        _ = try ID3Header.readFooter(reader);
     }
 
     return metadata_id3v2_container;

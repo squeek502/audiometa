@@ -489,6 +489,25 @@ test "id3v2.4 extended header with crc" {
     });
 }
 
+test "id3v2.4 footer" {
+    try parseExpectedMetadata(testing.allocator, "data/id3v2.4_footer.mp3", .{
+        .all_id3v2 = &[_]ExpectedID3v2Metadata{
+            .{
+                .major_version = 4,
+                .metadata = .{
+                    .start_offset = 0x0,
+                    .end_offset = 0x5D,
+                    .map = &[_]MetadataEntry{
+                        .{ .name = "TIT2", .value = "Test" },
+                        .{ .name = "TPE1", .value = "Test2" },
+                        .{ .name = "TPE2", .value = "Test2" },
+                    },
+                },
+            },
+        },
+    });
+}
+
 test "normal flac" {
     try parseExpectedMetadata(testing.allocator, "data/flac.flac", .{
         .all_id3v2 = null,

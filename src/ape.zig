@@ -175,4 +175,8 @@ pub fn readItems(allocator: *Allocator, reader: anytype, seekable_stream: anytyp
             },
         }
     }
+
+    // TODO: seems like we should do some validation here,
+    // like checking that i == item_count or that we've read the
+    // full data?
 }

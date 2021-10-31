@@ -18,7 +18,7 @@ pub fn zigMain() !void {
     defer allocator.free(data);
     var stream_source = std.io.StreamSource{ .buffer = std.io.fixedBufferStream(data) };
 
-    // default to 4mb minimum just incase we get very small files that need to allocate
+    // default to 4kb minimum just in case we get very small files that need to allocate
     // fairly large sizes for things like ArrayList(ID3v2Metadata)
     const max_allocation_size = std.math.max(4096, data.len * 10);
     var max_size_allocator = &(MaxSizeAllocator.init(allocator, max_allocation_size).allocator);
@@ -28,7 +28,7 @@ pub fn zigMain() !void {
 }
 
 /// Allocator that checks that individual allocations never go over
-/// a certain size, and panics if they ever do
+/// a certain size, and panics if they do
 const MaxSizeAllocator = struct {
     allocator: Allocator,
     parent_allocator: *Allocator,
