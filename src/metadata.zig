@@ -260,12 +260,8 @@ pub const AllMetadata = struct {
 
         for (self.tags) |*tag| {
             if (@as(MetadataType, tag.*) == tag_type) {
-                switch (tag.*) {
-                    tag_type => |*val| {
-                        try buf.append(val);
-                    },
-                    else => unreachable,
-                }
+                var val = &@field(tag.*, @tagName(tag_type));
+                try buf.append(val);
             }
         }
 
@@ -275,12 +271,7 @@ pub const AllMetadata = struct {
     pub fn getFirstMetadataOfType(self: AllMetadata, comptime tag_type: MetadataType) ?*std.meta.TagPayload(TypedMetadata, tag_type) {
         for (self.tags) |*tag| {
             if (@as(MetadataType, tag.*) == tag_type) {
-                switch (tag.*) {
-                    tag_type => |*val| {
-                        return val;
-                    },
-                    else => unreachable,
-                }
+                return &@field(tag.*, @tagName(tag_type));
             }
         }
         return null;
@@ -290,12 +281,7 @@ pub const AllMetadata = struct {
         var i = self.tags.len - 1;
         while (i > 0) : (i -= 1) {
             if (@as(MetadataType, self.tags[i]) == tag_type) {
-                switch (self.tags[i]) {
-                    tag_type => |*val| {
-                        return val;
-                    },
-                    else => unreachable,
-                }
+                return &@field(self.tags[i], @tagName(tag_type));
             }
         }
         return null;
