@@ -251,16 +251,17 @@ pub const AllMetadata = struct {
         }
     }
 
-    // fairly ugly hack to make it easier to translate parse_tests,
-    // TODO: decide if this should exist or not
-    pub fn getAllMetadataOfType(self: AllMetadata, allocator: *Allocator, comptime T: type, comptime tag_type: MetadataType) ![]T {
-        var buf = std.ArrayList(T).init(allocator);
-        defer buf.deinit();
+    /// Returns an allocated slice of pointers to all metadata of the given type.
+    /// Caller is responsible for freeing the slice's memory.
+    pub fn getAllMetadataOfType(self: AllMetadata, allocator: *Allocator, comptime tag_type: MetadataType) ![]*std.meta.TagPayload(TypedMetadata, tag_type) {
+        const T = std.meta.TagPayload(TypedMetadata, tag_type);
+        var buf = std.ArrayList(*T).init(allocator);
+        errdefer buf.deinit();
 
-        for (self.tags) |tag| {
-            if (@as(MetadataType, tag) == tag_type) {
-                switch (tag) {
-                    tag_type => |val| {
+        for (self.tags) |*tag| {
+            if (@as(MetadataType, tag.*) == tag_type) {
+                switch (tag.*) {
+                    tag_type => |*val| {
                         try buf.append(val);
                     },
                     else => unreachable,
@@ -269,6 +270,35 @@ pub const AllMetadata = struct {
         }
 
         return buf.toOwnedSlice();
+    }
+
+    pub fn getFirstMetadataOfType(self: AllMetadata, comptime tag_type: MetadataType) ?*std.meta.TagPayload(TypedMetadata, tag_type) {
+        for (self.tags) |*tag| {
+            if (@as(MetadataType, tag.*) == tag_type) {
+                switch (tag.*) {
+                    tag_type => |*val| {
+                        return val;
+                    },
+                    else => unreachable,
+                }
+            }
+        }
+        return null;
+    }
+
+    pub fn getLastMetadataOfType(self: AllMetadata, comptime tag_type: MetadataType) ?*std.meta.TagPayload(TypedMetadata, tag_type) {
+        var i = self.tags.len - 1;
+        while (i > 0) : (i -= 1) {
+            if (@as(MetadataType, self.tags[i]) == tag_type) {
+                switch (self.tags[i]) {
+                    tag_type => |*val| {
+                        return val;
+                    },
+                    else => unreachable,
+                }
+            }
+        }
+        return null;
     }
 };
 
@@ -503,4 +533,43 @@ test "metadata map" {
     try metadata.putOrReplaceFirst("date", "2019");
     const new_date = metadata.getFirst("date").?;
     try std.testing.expectEqualStrings("2019", new_date);
+}
+
+test "AllMetadata.getXOfType" {
+    var allocator = std.testing.allocator;
+    var metadata_buf = std.ArrayList(TypedMetadata).init(allocator);
+    defer metadata_buf.deinit();
+
+    try metadata_buf.append(TypedMetadata{ .id3v2 = ID3v2Metadata{
+        .metadata = undefined,
+        .header = undefined,
+    } });
+    try metadata_buf.append(TypedMetadata{ .id3v2 = ID3v2Metadata{
+        .metadata = undefined,
+        .header = undefined,
+    } });
+    try metadata_buf.append(TypedMetadata{ .flac = undefined });
+    try metadata_buf.append(TypedMetadata{ .id3v1 = undefined });
+    try metadata_buf.append(TypedMetadata{ .id3v1 = undefined });
+
+    var all = AllMetadata{
+        .allocator = allocator,
+        .tags = metadata_buf.toOwnedSlice(),
+    };
+    defer all.deinit();
+
+    const all_id3v2 = try all.getAllMetadataOfType(allocator, .id3v2);
+    defer allocator.free(all_id3v2);
+    try std.testing.expectEqual(@as(usize, 2), all_id3v2.len);
+
+    const first_id3v2 = all.getFirstMetadataOfType(.id3v2);
+    try std.testing.expect(first_id3v2 == &all.tags[0].id3v2);
+
+    const last_id3v2 = all.getLastMetadataOfType(.id3v2).?;
+    try std.testing.expect(last_id3v2 == &all.tags[1].id3v2);
+
+    const last_id3v1 = all.getLastMetadataOfType(.id3v1).?;
+    try std.testing.expect(last_id3v1 == &all.tags[all.tags.len - 1].id3v1);
+
+    try std.testing.expect(null == all.getFirstMetadataOfType(.vorbis));
 }

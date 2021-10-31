@@ -27,7 +27,7 @@ fn parseExpectedMetadata(allocator: *Allocator, comptime path: []const u8, expec
 // TODO: Update this to not be garbage, ExpectedAllMetadata should be updated
 // be more similar to AllMetadata
 fn compareAllMetadata(allocator: *Allocator, all_expected: *const ExpectedAllMetadata, all_actual: *const AllMetadata) !void {
-    const all_id3v2_actual = try all_actual.getAllMetadataOfType(allocator, audiometa.metadata.ID3v2Metadata, .id3v2);
+    const all_id3v2_actual = try all_actual.getAllMetadataOfType(allocator, .id3v2);
     defer allocator.free(all_id3v2_actual);
 
     if (all_expected.all_id3v2) |all_id3v2_expected| {
@@ -40,43 +40,43 @@ fn compareAllMetadata(allocator: *Allocator, all_expected: *const ExpectedAllMet
         return error.UnexpectedID3v2;
     }
 
-    const all_id3v1_actual = try all_actual.getAllMetadataOfType(allocator, audiometa.metadata.Metadata, .id3v1);
+    const all_id3v1_actual = try all_actual.getAllMetadataOfType(allocator, .id3v1);
     defer allocator.free(all_id3v1_actual);
 
     if (all_expected.id3v1) |*expected| {
         try testing.expectEqual(@as(usize, 1), all_id3v1_actual.len);
-        return compareMetadata(expected, &all_id3v1_actual[0]);
+        try compareMetadata(expected, all_id3v1_actual[0]);
     } else if (all_id3v1_actual.len != 0) {
         return error.UnexpectedID3v1;
     }
 
-    const all_flac_actual = try all_actual.getAllMetadataOfType(allocator, audiometa.metadata.Metadata, .flac);
+    const all_flac_actual = try all_actual.getAllMetadataOfType(allocator, .flac);
     defer allocator.free(all_flac_actual);
 
     if (all_expected.flac) |*expected| {
         try testing.expectEqual(@as(usize, 1), all_flac_actual.len);
-        return compareMetadata(expected, &all_flac_actual[0]);
+        try compareMetadata(expected, all_flac_actual[0]);
     } else if (all_flac_actual.len != 0) {
         return error.UnexpectedFLAC;
     }
 
-    const all_vorbis_actual = try all_actual.getAllMetadataOfType(allocator, audiometa.metadata.Metadata, .vorbis);
+    const all_vorbis_actual = try all_actual.getAllMetadataOfType(allocator, .vorbis);
     defer allocator.free(all_vorbis_actual);
 
     if (all_expected.vorbis) |*expected| {
         try testing.expectEqual(@as(usize, 1), all_vorbis_actual.len);
-        return compareMetadata(expected, &all_vorbis_actual[0]);
+        try compareMetadata(expected, all_vorbis_actual[0]);
     } else if (all_vorbis_actual.len != 0) {
         return error.UnexpectedVorbis;
     }
 
-    const all_ape_actual = try all_actual.getAllMetadataOfType(allocator, audiometa.metadata.APEMetadata, .ape);
+    const all_ape_actual = try all_actual.getAllMetadataOfType(allocator, .ape);
     defer allocator.free(all_ape_actual);
 
     if (all_expected.ape_suffixed) |*expected| {
         try testing.expectEqual(@as(usize, 1), all_ape_actual.len);
         try testing.expectEqual(expected.version, all_ape_actual[0].header_or_footer.version);
-        return compareMetadata(&expected.metadata, &all_ape_actual[0].metadata);
+        try compareMetadata(&expected.metadata, &all_ape_actual[0].metadata);
     } else if (all_ape_actual.len != 0) {
         return error.UnexpectedAPE;
     }
