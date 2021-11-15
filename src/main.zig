@@ -17,28 +17,26 @@ pub fn main() anyerror!void {
         var metadata = try audiometa.metadata.readAll(allocator, &stream_source);
         defer metadata.deinit();
 
-        var id3v2_count: usize = 0;
-        for (metadata.tags) |tag| {
+        for (metadata.tags) |tag, i| {
             switch (tag) {
                 .id3v1 => |*id3v1_meta| {
-                    std.debug.print("\nID3v1 Tag\n=========\n", .{});
+                    std.debug.print("\n#{}: ID3v1 Tag\n=============\n", .{i + 1});
                     id3v1_meta.map.dump();
                 },
                 .flac => |*flac_meta| {
-                    std.debug.print("\nFLAC Metadata\n=============\n", .{});
+                    std.debug.print("\n#{}: FLAC Metadata\n=================\n", .{i + 1});
                     flac_meta.map.dump();
                 },
                 .vorbis => |*vorbis_meta| {
-                    std.debug.print("\nVorbis Tag\n==========\n", .{});
+                    std.debug.print("\n#{}: Vorbis Tag\n==============\n", .{i + 1});
                     vorbis_meta.map.dump();
                 },
                 .id3v2 => |*id3v2_meta| {
-                    id3v2_count += 1;
-                    std.debug.print("\nID3v2 Tag #{} (v2.{d})\n===================\n", .{ id3v2_count, id3v2_meta.header.major_version });
+                    std.debug.print("\n#{}: ID3v2 Tag (v2.{d})\n=======================\n", .{ i + 1, id3v2_meta.header.major_version });
                     id3v2_meta.metadata.map.dump();
                 },
                 .ape => |*ape_meta| {
-                    std.debug.print("\nAPE Tag (v{d})\n=============\n", .{ape_meta.header_or_footer.version});
+                    std.debug.print("\n#{}: APE Tag (v{d})\n=================\n", .{ i + 1, ape_meta.header_or_footer.version });
                     ape_meta.metadata.map.dump();
                 },
             }
