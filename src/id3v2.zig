@@ -159,6 +159,17 @@ pub const FrameHeader = struct {
     }
 };
 
+pub const TextEncoding = enum(u8) {
+    iso_8859_1 = 0,
+    utf16_with_bom = 1,
+    utf16_no_bom = 2,
+    utf8 = 3,
+
+    pub fn fromByte(byte: u8) error{InvalidTextEncodingByte}!TextEncoding {
+        return std.meta.intToEnum(TextEncoding, byte) catch error.InvalidTextEncodingByte;
+    }
+};
+
 pub fn skip(reader: anytype, seekable_stream: anytype) !void {
     const header = ID3Header.read(reader) catch {
         try seekable_stream.seekTo(0);
@@ -225,6 +236,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
             return error.UnexpectedTextDataEnd;
         }
         const encoding_byte = try unsynch_capable_reader.readByte();
+        const encoding = try TextEncoding.fromByte(encoding_byte);
         text_data_size -= 1;
 
         // Treat as NUL terminated because some v2.3 tags will use 3 length IDs
@@ -247,8 +259,8 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
             return metadata_map.put(id, "");
         }
 
-        switch (encoding_byte) {
-            0, 3 => { // 0 = ISO-8859-1 aka latin1, 3 = UTF-8
+        switch (encoding) {
+            .iso_8859_1, .utf8 => {
                 var raw_text_data = try allocator.alloc(u8, text_data_size);
                 defer allocator.free(raw_text_data);
 
@@ -260,7 +272,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
                 }
 
                 // If the text is latin1, then convert it to UTF-8
-                if (encoding_byte == 0) {
+                if (encoding == .iso_8859_1) {
                     var utf8_text = try latin1.latin1ToUtf8Alloc(allocator, text_data);
 
                     // the utf8 data is now the raw_text_data
@@ -280,8 +292,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
                     try metadata_map.put(id, text);
                 }
             },
-            1, 2 => { // UTF-16 (1 = with BOM, 2 = without)
-                const has_bom = encoding_byte == 1;
+            .utf16_with_bom, .utf16_no_bom => {
                 const u16_align = @alignOf(u16);
                 var raw_text_data = try allocator.allocWithOptions(u8, text_data_size, u16_align, null);
                 defer allocator.free(raw_text_data);
@@ -305,7 +316,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
 
                 // if this is big endian, then swap everything to little endian up front
                 // TODO: I feel like this probably won't handle big endian native architectures correctly
-                if (has_bom) {
+                if (encoding == .utf16_with_bom) {
                     if (utf16_text.len == 0) {
                         return error.UnexpectedTextDataEnd;
                     }
@@ -320,7 +331,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
                 var it = std.mem.split(u16, utf16_text, &[_]u16{0x0000});
 
                 var text = it.next().?;
-                if (has_bom) {
+                if (encoding == .utf16_with_bom) {
                     // check for byte order mark and skip it
                     if (text.len == 0 or text[0] != 0xFEFF) {
                         return error.InvalidUTF16BOM;
@@ -335,7 +346,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
 
                 if (is_user_defined) {
                     var value = it.next() orelse return error.InvalidUserDefinedTextFrame;
-                    if (has_bom) {
+                    if (encoding == .utf16_with_bom) {
                         // check for byte order mark and skip it
                         if (value.len == 0 or value[0] != 0xFEFF) {
                             return error.InvalidUTF16BOM;
@@ -353,7 +364,6 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
                     try metadata_map.put(id, utf8_text);
                 }
             },
-            else => return error.InvalidTextEncodingByte,
         }
     } else {
         try frame_header.skipData(unsynch_capable_reader, seekable_stream, full_unsynch);
