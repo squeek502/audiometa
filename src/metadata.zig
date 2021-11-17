@@ -253,7 +253,7 @@ pub const AllMetadata = struct {
                     id3v2_meta.metadata.map.dump();
                 },
                 .ape => |*ape_meta| {
-                    std.debug.print("# APEv{d} (suffixed) 0x{x}-0x{x}\n", .{ ape_meta.header_or_footer.version, ape_meta.metadata.start_offset, ape_meta.metadata.end_offset });
+                    std.debug.print("# APEv{d} 0x{x}-0x{x}\n", .{ ape_meta.header_or_footer.version, ape_meta.metadata.start_offset, ape_meta.metadata.end_offset });
                     ape_meta.metadata.map.dump();
                 },
             }
