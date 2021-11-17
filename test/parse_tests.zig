@@ -8,14 +8,14 @@ const Allocator = std.mem.Allocator;
 
 pub const log_level: std.log.Level = .debug;
 
-fn parseExpectedMetadata(allocator: *Allocator, comptime path: []const u8, expected_meta: ExpectedAllMetadata) !void {
+fn parseExpectedMetadata(comptime path: []const u8, expected_meta: ExpectedAllMetadata) !void {
     std.log.debug("{s}\n", .{path});
     const data = @embedFile(path);
     var stream_source = std.io.StreamSource{ .const_buffer = std.io.fixedBufferStream(data) };
     var meta = try audiometa.metadata.readAll(testing.allocator, &stream_source);
     defer meta.deinit();
 
-    compareAllMetadata(allocator, &expected_meta, &meta) catch |err| {
+    compareAllMetadata(&expected_meta, &meta) catch |err| {
         std.debug.print("\nexpected:\n", .{});
         expected_meta.dump();
         std.debug.print("\nactual:\n", .{});
@@ -26,63 +26,25 @@ fn parseExpectedMetadata(allocator: *Allocator, comptime path: []const u8, expec
 
 // TODO: Update this to not be garbage, ExpectedAllMetadata should be updated
 // be more similar to AllMetadata
-fn compareAllMetadata(allocator: *Allocator, all_expected: *const ExpectedAllMetadata, all_actual: *const AllMetadata) !void {
-    const all_id3v2_actual = try all_actual.getAllMetadataOfType(allocator, .id3v2);
-    defer allocator.free(all_id3v2_actual);
-
-    if (all_expected.all_id3v2) |all_id3v2_expected| {
-        try testing.expectEqual(all_id3v2_expected.len, all_id3v2_actual.len);
-        for (all_id3v2_expected) |id3v2_expected, i| {
-            try testing.expectEqual(id3v2_expected.major_version, all_id3v2_actual[i].header.major_version);
-            try compareMetadata(&id3v2_expected.metadata, &all_id3v2_actual[i].metadata);
+fn compareAllMetadata(all_expected: *const ExpectedAllMetadata, all_actual: *const AllMetadata) !void {
+    try testing.expectEqual(all_expected.tags.len, all_actual.tags.len);
+    for (all_expected.tags) |expected_tag, i| {
+        const actual_tag = all_actual.tags[i];
+        try testing.expectEqual(std.meta.activeTag(expected_tag), std.meta.activeTag(actual_tag));
+        switch (expected_tag) {
+            .id3v2 => {
+                try testing.expectEqual(expected_tag.id3v2.major_version, actual_tag.id3v2.header.major_version);
+            },
+            .ape => {
+                try testing.expectEqual(expected_tag.ape.version, actual_tag.ape.header_or_footer.version);
+            },
+            else => {},
         }
-    } else if (all_id3v2_actual.len != 0) {
-        return error.UnexpectedID3v2;
-    }
-
-    const all_id3v1_actual = try all_actual.getAllMetadataOfType(allocator, .id3v1);
-    defer allocator.free(all_id3v1_actual);
-
-    if (all_expected.id3v1) |*expected| {
-        try testing.expectEqual(@as(usize, 1), all_id3v1_actual.len);
-        try compareMetadata(expected, all_id3v1_actual[0]);
-    } else if (all_id3v1_actual.len != 0) {
-        return error.UnexpectedID3v1;
-    }
-
-    const all_flac_actual = try all_actual.getAllMetadataOfType(allocator, .flac);
-    defer allocator.free(all_flac_actual);
-
-    if (all_expected.flac) |*expected| {
-        try testing.expectEqual(@as(usize, 1), all_flac_actual.len);
-        try compareMetadata(expected, all_flac_actual[0]);
-    } else if (all_flac_actual.len != 0) {
-        return error.UnexpectedFLAC;
-    }
-
-    const all_vorbis_actual = try all_actual.getAllMetadataOfType(allocator, .vorbis);
-    defer allocator.free(all_vorbis_actual);
-
-    if (all_expected.vorbis) |*expected| {
-        try testing.expectEqual(@as(usize, 1), all_vorbis_actual.len);
-        try compareMetadata(expected, all_vorbis_actual[0]);
-    } else if (all_vorbis_actual.len != 0) {
-        return error.UnexpectedVorbis;
-    }
-
-    const all_ape_actual = try all_actual.getAllMetadataOfType(allocator, .ape);
-    defer allocator.free(all_ape_actual);
-
-    if (all_expected.ape_suffixed) |*expected| {
-        try testing.expectEqual(@as(usize, 1), all_ape_actual.len);
-        try testing.expectEqual(expected.version, all_ape_actual[0].header_or_footer.version);
-        try compareMetadata(&expected.metadata, &all_ape_actual[0].metadata);
-    } else if (all_ape_actual.len != 0) {
-        return error.UnexpectedAPE;
+        try compareMetadata(expected_tag.getMetadata(), actual_tag.getMetadata());
     }
 }
 
-fn compareMetadata(expected: *const ExpectedMetadata, actual: *const audiometa.metadata.Metadata) !void {
+fn compareMetadata(expected: ExpectedMetadata, actual: audiometa.metadata.Metadata) !void {
     try testing.expectEqual(expected.map.len, actual.map.entries.items.len);
     try testing.expectEqual(expected.start_offset, actual.start_offset);
     try testing.expectEqual(expected.end_offset, actual.end_offset);
@@ -105,44 +67,48 @@ fn compareMetadata(expected: *const ExpectedMetadata, actual: *const audiometa.m
     }
 }
 
+pub const ExpectedTypedMetadata = union(audiometa.metadata.MetadataType) {
+    id3v1: ExpectedMetadata,
+    id3v2: ExpectedID3v2Metadata,
+    ape: ExpectedAPEMetadata,
+    flac: ExpectedMetadata,
+    vorbis: ExpectedMetadata,
+
+    /// Convenience function to get the ExpectedMetadata for any TypedMetadata
+    pub fn getMetadata(typed_meta: ExpectedTypedMetadata) ExpectedMetadata {
+        return switch (typed_meta) {
+            .id3v1, .flac, .vorbis => |val| val,
+            .id3v2 => |val| val.metadata,
+            .ape => |val| val.metadata,
+        };
+    }
+};
 const ExpectedAllMetadata = struct {
-    all_id3v2: ?[]const ExpectedID3v2Metadata = null,
-    id3v1: ?ExpectedMetadata = null,
-    flac: ?ExpectedMetadata = null,
-    vorbis: ?ExpectedMetadata = null,
-    ape_suffixed: ?ExpectedAPEMetadata = null,
+    tags: []const ExpectedTypedMetadata,
 
     pub fn dump(self: *const ExpectedAllMetadata) void {
-        if (self.all_id3v2) |all_id3v2| {
-            for (all_id3v2) |id3v2_meta| {
-                std.debug.print("# ID3v2 v2.{d} 0x{x}-0x{x}\n", .{ id3v2_meta.major_version, id3v2_meta.metadata.start_offset, id3v2_meta.metadata.end_offset });
-                for (id3v2_meta.metadata.map) |entry| {
-                    std.debug.print("{s}={s}\n", .{ fmtUtf8SliceEscapeUpper(entry.name), fmtUtf8SliceEscapeUpper(entry.value) });
-                }
-            }
-        }
-        if (self.id3v1) |id3v1_meta| {
-            std.debug.print("# ID3v1 0x{x}-0x{x}\n", .{ id3v1_meta.start_offset, id3v1_meta.end_offset });
-            for (id3v1_meta.map) |entry| {
-                std.debug.print("{s}={s}\n", .{ fmtUtf8SliceEscapeUpper(entry.name), fmtUtf8SliceEscapeUpper(entry.value) });
-            }
-        }
-        if (self.flac) |flac_meta| {
-            std.debug.print("# FLAC 0x{x}-0x{x}\n", .{ flac_meta.start_offset, flac_meta.end_offset });
-            for (flac_meta.map) |entry| {
-                std.debug.print("{s}={s}\n", .{ fmtUtf8SliceEscapeUpper(entry.name), fmtUtf8SliceEscapeUpper(entry.value) });
-            }
-        }
-        if (self.vorbis) |vorbis_meta| {
-            std.debug.print("# Vorbis 0x{x}-0x{x}\n", .{ vorbis_meta.start_offset, vorbis_meta.end_offset });
-            for (vorbis_meta.map) |entry| {
-                std.debug.print("{s}={s}\n", .{ fmtUtf8SliceEscapeUpper(entry.name), fmtUtf8SliceEscapeUpper(entry.value) });
-            }
-        }
-        if (self.ape_suffixed) |ape_meta| {
-            std.debug.print("# APE (suffixed) 0x{x}-0x{x}\n", .{ ape_meta.metadata.start_offset, ape_meta.metadata.end_offset });
-            for (ape_meta.metadata.map) |entry| {
-                std.debug.print("{s}={s}\n", .{ fmtUtf8SliceEscapeUpper(entry.name), fmtUtf8SliceEscapeUpper(entry.value) });
+        for (self.tags) |tag| {
+            switch (tag) {
+                .id3v1 => |*id3v1_meta| {
+                    std.debug.print("# ID3v1 0x{x}-0x{x}\n", .{ id3v1_meta.start_offset, id3v1_meta.end_offset });
+                    id3v1_meta.dump();
+                },
+                .flac => |*flac_meta| {
+                    std.debug.print("# FLAC 0x{x}-0x{x}\n", .{ flac_meta.start_offset, flac_meta.end_offset });
+                    flac_meta.dump();
+                },
+                .vorbis => |*vorbis_meta| {
+                    std.debug.print("# Vorbis 0x{x}-0x{x}\n", .{ vorbis_meta.start_offset, vorbis_meta.end_offset });
+                    vorbis_meta.dump();
+                },
+                .id3v2 => |*id3v2_meta| {
+                    std.debug.print("# ID3v2 v2.{d} 0x{x}-0x{x}\n", .{ id3v2_meta.major_version, id3v2_meta.metadata.start_offset, id3v2_meta.metadata.end_offset });
+                    id3v2_meta.metadata.dump();
+                },
+                .ape => |*ape_meta| {
+                    std.debug.print("# APEv{d} (suffixed) 0x{x}-0x{x}\n", .{ ape_meta.version, ape_meta.metadata.start_offset, ape_meta.metadata.end_offset });
+                    ape_meta.metadata.dump();
+                },
             }
         }
     }
@@ -159,11 +125,17 @@ const ExpectedMetadata = struct {
     start_offset: usize,
     end_offset: usize,
     map: []const MetadataEntry,
+
+    pub fn dump(metadata: *const ExpectedMetadata) void {
+        for (metadata.map) |entry| {
+            std.debug.print("{s}={s}\n", .{ fmtUtf8SliceEscapeUpper(entry.name), fmtUtf8SliceEscapeUpper(entry.value) });
+        }
+    }
 };
 
 test "standard id3v1" {
-    try parseExpectedMetadata(testing.allocator, "data/id3v1.mp3", .{
-        .id3v1 = .{
+    try parseExpectedMetadata("data/id3v1.mp3", .{ .tags = &.{
+        .{ .id3v1 = .{
             .start_offset = 0x0,
             .end_offset = 0x80,
             .map = &[_]MetadataEntry{
@@ -173,25 +145,25 @@ test "standard id3v1" {
                 .{ .name = "track", .value = "1" },
                 .{ .name = "genre", .value = "Blues" },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "empty (all zeros) id3v1" {
-    try parseExpectedMetadata(testing.allocator, "data/id3v1_empty.mp3", .{
-        .id3v1 = .{
+    try parseExpectedMetadata("data/id3v1_empty.mp3", .{ .tags = &.{
+        .{ .id3v1 = .{
             .start_offset = 0x0,
             .end_offset = 0x80,
             .map = &[_]MetadataEntry{
                 .{ .name = "genre", .value = "Blues" },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "id3v1 with non-ASCII chars (latin1)" {
-    try parseExpectedMetadata(testing.allocator, "data/id3v1_latin1_chars.mp3", .{
-        .id3v1 = .{
+    try parseExpectedMetadata("data/id3v1_latin1_chars.mp3", .{ .tags = &.{
+        .{ .id3v1 = .{
             .start_offset = 0x0,
             .end_offset = 0x80,
             .map = &[_]MetadataEntry{
@@ -201,33 +173,31 @@ test "id3v1 with non-ASCII chars (latin1)" {
                 .{ .name = "date", .value = "2007" },
                 .{ .name = "track", .value = "1" },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "id3v2.3 with UTF-16" {
-    try parseExpectedMetadata(testing.allocator, "data/id3v2.3.mp3", .{
-        .all_id3v2 = &[_]ExpectedID3v2Metadata{
-            .{
-                .major_version = 3,
-                .metadata = .{
-                    .start_offset = 0x0,
-                    .end_offset = 0x4604,
-                    .map = &[_]MetadataEntry{
-                        .{ .name = "TPE2", .value = "Muga" },
-                        .{ .name = "TIT2", .value = "死前解放 (Unleash Before Death)" },
-                        .{ .name = "TALB", .value = "Muga" },
-                        .{ .name = "TYER", .value = "2002" },
-                        .{ .name = "TRCK", .value = "02/11" },
-                        .{ .name = "TPOS", .value = "1/1" },
-                        .{ .name = "TPE1", .value = "Muga" },
-                        .{ .name = "MEDIAFORMAT", .value = "CD" },
-                        .{ .name = "PERFORMER", .value = "Muga" },
-                    },
+    try parseExpectedMetadata("data/id3v2.3.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 3,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x4604,
+                .map = &[_]MetadataEntry{
+                    .{ .name = "TPE2", .value = "Muga" },
+                    .{ .name = "TIT2", .value = "死前解放 (Unleash Before Death)" },
+                    .{ .name = "TALB", .value = "Muga" },
+                    .{ .name = "TYER", .value = "2002" },
+                    .{ .name = "TRCK", .value = "02/11" },
+                    .{ .name = "TPOS", .value = "1/1" },
+                    .{ .name = "TPE1", .value = "Muga" },
+                    .{ .name = "MEDIAFORMAT", .value = "CD" },
+                    .{ .name = "PERFORMER", .value = "Muga" },
                 },
             },
-        },
-        .id3v1 = .{
+        } },
+        .{ .id3v1 = .{
             .start_offset = 0x4604,
             .end_offset = 0x4684,
             .map = &[_]MetadataEntry{
@@ -238,300 +208,274 @@ test "id3v2.3 with UTF-16" {
                 .{ .name = "comment", .value = "EAC V1.0 beta 2, Secure Mode" },
                 .{ .name = "track", .value = "2" },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "id3v2.3 with UTF-16 big endian" {
-    try parseExpectedMetadata(testing.allocator, "data/id3v2.3_utf16_be.mp3", .{
-        .all_id3v2 = &[_]ExpectedID3v2Metadata{
-            .{
-                .major_version = 3,
-                .metadata = .{
-                    .start_offset = 0x0,
-                    .end_offset = 0x120,
-                    .map = &[_]MetadataEntry{
-                        .{ .name = "TSSE", .value = "LAME 32bits version 3.98 (http://www.mp3dev.org/)" },
-                        .{ .name = "TIT2", .value = "No Island of Dreams" },
-                        .{ .name = "TPE1", .value = "Conflict" },
-                        .{ .name = "TALB", .value = "It's Time To See Who's Who Now" },
-                        .{ .name = "TCON", .value = "Punk" },
-                        .{ .name = "TRCK", .value = "2" },
-                        .{ .name = "TYER", .value = "1985" },
-                        .{ .name = "TLEN", .value = "168000" },
-                    },
+    try parseExpectedMetadata("data/id3v2.3_utf16_be.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 3,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x120,
+                .map = &[_]MetadataEntry{
+                    .{ .name = "TSSE", .value = "LAME 32bits version 3.98 (http://www.mp3dev.org/)" },
+                    .{ .name = "TIT2", .value = "No Island of Dreams" },
+                    .{ .name = "TPE1", .value = "Conflict" },
+                    .{ .name = "TALB", .value = "It's Time To See Who's Who Now" },
+                    .{ .name = "TCON", .value = "Punk" },
+                    .{ .name = "TRCK", .value = "2" },
+                    .{ .name = "TYER", .value = "1985" },
+                    .{ .name = "TLEN", .value = "168000" },
                 },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "id3v2.3 with user defined fields (TXXX)" {
-    try parseExpectedMetadata(testing.allocator, "data/id3v2.3_user_defined_fields.mp3", .{
-        .all_id3v2 = &[_]ExpectedID3v2Metadata{
-            .{
-                .major_version = 3,
-                .metadata = .{
-                    .start_offset = 0x0,
-                    .end_offset = 0x937,
-                    .map = &[_]MetadataEntry{
-                        .{ .name = "TLAN", .value = "eng" },
-                        .{ .name = "TRCK", .value = "1/14" },
-                        .{ .name = "TPE1", .value = "Acephalix" },
-                        .{ .name = "TIT2", .value = "Immanent" },
-                        .{ .name = "Rip date", .value = "2010-09-20" },
-                        .{ .name = "TYER", .value = "2010" },
-                        .{ .name = "TDAT", .value = "0000" },
-                        .{ .name = "Source", .value = "CD" },
-                        .{ .name = "TSSE", .value = "LAME 3.97 (-V2 --vbr-new)" },
-                        .{ .name = "Release type", .value = "Normal release" },
-                        .{ .name = "TCON", .value = "Hardcore" },
-                        .{ .name = "TPUB", .value = "Prank Records" },
-                        .{ .name = "Catalog #", .value = "Prank 110" },
-                        .{ .name = "TALB", .value = "Aporia" },
-                    },
+    try parseExpectedMetadata("data/id3v2.3_user_defined_fields.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 3,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x937,
+                .map = &[_]MetadataEntry{
+                    .{ .name = "TLAN", .value = "eng" },
+                    .{ .name = "TRCK", .value = "1/14" },
+                    .{ .name = "TPE1", .value = "Acephalix" },
+                    .{ .name = "TIT2", .value = "Immanent" },
+                    .{ .name = "Rip date", .value = "2010-09-20" },
+                    .{ .name = "TYER", .value = "2010" },
+                    .{ .name = "TDAT", .value = "0000" },
+                    .{ .name = "Source", .value = "CD" },
+                    .{ .name = "TSSE", .value = "LAME 3.97 (-V2 --vbr-new)" },
+                    .{ .name = "Release type", .value = "Normal release" },
+                    .{ .name = "TCON", .value = "Hardcore" },
+                    .{ .name = "TPUB", .value = "Prank Records" },
+                    .{ .name = "Catalog #", .value = "Prank 110" },
+                    .{ .name = "TALB", .value = "Aporia" },
                 },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "id3v2.3 with full unsynch tag" {
-    try parseExpectedMetadata(testing.allocator, "data/id3v2.3_unsynch_tag.mp3", .{
-        .all_id3v2 = &[_]ExpectedID3v2Metadata{
-            .{
-                .major_version = 3,
-                .metadata = .{
-                    .start_offset = 0x0,
-                    .end_offset = 0x11D3,
-                    .map = &[_]MetadataEntry{
-                        .{ .name = "TIT2", .value = "Intro" },
-                        .{ .name = "TPE1", .value = "Disgust" },
-                        .{ .name = "TALB", .value = "Brutality of War" },
-                        .{ .name = "TRCK", .value = "01/15" },
-                        .{ .name = "TLEN", .value = "68173" },
-                        .{ .name = "TCON", .value = "Other" },
-                        .{ .name = "TENC", .value = "Exact Audio Copy   (Secure mode)" },
-                        .{ .name = "TSSE", .value = "flac.exe -V -8 -T \"artist=Disgust\" -T \"title=Intro\" -T \"album=Brutality of War\" -T \"date=\" -T \"tracknumber=01\" -T \"genre=Other\"" },
-                    },
+    try parseExpectedMetadata("data/id3v2.3_unsynch_tag.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 3,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x11D3,
+                .map = &[_]MetadataEntry{
+                    .{ .name = "TIT2", .value = "Intro" },
+                    .{ .name = "TPE1", .value = "Disgust" },
+                    .{ .name = "TALB", .value = "Brutality of War" },
+                    .{ .name = "TRCK", .value = "01/15" },
+                    .{ .name = "TLEN", .value = "68173" },
+                    .{ .name = "TCON", .value = "Other" },
+                    .{ .name = "TENC", .value = "Exact Audio Copy   (Secure mode)" },
+                    .{ .name = "TSSE", .value = "flac.exe -V -8 -T \"artist=Disgust\" -T \"title=Intro\" -T \"album=Brutality of War\" -T \"date=\" -T \"tracknumber=01\" -T \"genre=Other\"" },
                 },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "id3v2.3 with id3v2.2 frame ids" {
-    try parseExpectedMetadata(testing.allocator, "data/id3v2.3_with_id3v2.2_frame_ids.mp3", .{
-        .all_id3v2 = &[_]ExpectedID3v2Metadata{
-            .{
-                .major_version = 3,
-                .metadata = .{
-                    .start_offset = 0x0,
-                    .end_offset = 0x1154,
-                    .map = &[_]MetadataEntry{
-                        .{ .name = "TENC", .value = "iTunes v7.6.1" },
-                        .{ .name = "TIT2", .value = "Religion Is Fear" },
-                        .{ .name = "TYER", .value = "2008" },
-                        .{ .name = "TCON", .value = "Grindcore" },
-                        .{ .name = "TALB", .value = "Trap Them & Extreme Noise Terror Split 7\"EP" },
-                        .{ .name = "TRCK", .value = "1" },
-                        .{ .name = "TPE1", .value = "Extreme Noise Terror" },
-                        .{ .name = "TCP", .value = "1" },
-                    },
+    try parseExpectedMetadata("data/id3v2.3_with_id3v2.2_frame_ids.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 3,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x1154,
+                .map = &[_]MetadataEntry{
+                    .{ .name = "TENC", .value = "iTunes v7.6.1" },
+                    .{ .name = "TIT2", .value = "Religion Is Fear" },
+                    .{ .name = "TYER", .value = "2008" },
+                    .{ .name = "TCON", .value = "Grindcore" },
+                    .{ .name = "TALB", .value = "Trap Them & Extreme Noise Terror Split 7\"EP" },
+                    .{ .name = "TRCK", .value = "1" },
+                    .{ .name = "TPE1", .value = "Extreme Noise Terror" },
+                    .{ .name = "TCP", .value = "1" },
                 },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "id3v2.3 with text frame with zero size" {
-    try parseExpectedMetadata(testing.allocator, "data/id3v2.3_text_frame_with_zero_size.mp3", .{
-        .all_id3v2 = &[_]ExpectedID3v2Metadata{
-            .{
-                .major_version = 3,
-                .metadata = .{
-                    .start_offset = 0x0,
-                    .end_offset = 0x183,
-                    .map = &[_]MetadataEntry{
-                        .{ .name = "TCON", .value = "(129)Hardcore" },
-                        .{ .name = "TRCK", .value = "1" },
-                        .{ .name = "TYER", .value = "2004" },
-                        .{ .name = "TALB", .value = "Italian Girls (The Best In The World)" },
-                        .{ .name = "TPE1", .value = "A Taste For Murder" },
-                        .{ .name = "TIT2", .value = "Rosario" },
-                        .{ .name = "TENC", .value = "" },
-                        .{ .name = "TCOP", .value = "" },
-                        .{ .name = "TOPE", .value = "" },
-                        .{ .name = "TCOM", .value = "" },
-                    },
+    try parseExpectedMetadata("data/id3v2.3_text_frame_with_zero_size.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 3,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x183,
+                .map = &[_]MetadataEntry{
+                    .{ .name = "TCON", .value = "(129)Hardcore" },
+                    .{ .name = "TRCK", .value = "1" },
+                    .{ .name = "TYER", .value = "2004" },
+                    .{ .name = "TALB", .value = "Italian Girls (The Best In The World)" },
+                    .{ .name = "TPE1", .value = "A Taste For Murder" },
+                    .{ .name = "TIT2", .value = "Rosario" },
+                    .{ .name = "TENC", .value = "" },
+                    .{ .name = "TCOP", .value = "" },
+                    .{ .name = "TOPE", .value = "" },
+                    .{ .name = "TCOM", .value = "" },
                 },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "id3v2.2" {
-    try parseExpectedMetadata(testing.allocator, "data/id3v2.2.mp3", .{
-        .all_id3v2 = &[_]ExpectedID3v2Metadata{
-            .{
-                .major_version = 2,
-                .metadata = .{
-                    .start_offset = 0x0,
-                    .end_offset = 0x86E,
-                    .map = &[_]MetadataEntry{
-                        .{ .name = "TT2", .value = "side a" },
-                        .{ .name = "TP1", .value = "a warm gun" },
-                        .{ .name = "TAL", .value = "escape" },
-                        .{ .name = "TRK", .value = "1" },
-                        .{ .name = "TEN", .value = "iTunes 8.0.1.11" },
-                    },
+    try parseExpectedMetadata("data/id3v2.2.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 2,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x86E,
+                .map = &[_]MetadataEntry{
+                    .{ .name = "TT2", .value = "side a" },
+                    .{ .name = "TP1", .value = "a warm gun" },
+                    .{ .name = "TAL", .value = "escape" },
+                    .{ .name = "TRK", .value = "1" },
+                    .{ .name = "TEN", .value = "iTunes 8.0.1.11" },
                 },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "id3v2.4 utf16 frames with single u8 delimeters" {
-    try parseExpectedMetadata(testing.allocator, "data/id3v2.4_utf16_single_u8_delimeter.mp3", .{
-        .all_id3v2 = &[_]ExpectedID3v2Metadata{
-            .{
-                .major_version = 4,
-                .metadata = .{
-                    .start_offset = 0x0,
-                    .end_offset = 0x980,
-                    .map = &[_]MetadataEntry{
-                        .{ .name = "TDRC", .value = "2010" },
-                        .{ .name = "TRCK", .value = "1/9" },
-                        .{ .name = "TPOS", .value = "1/1" },
-                        .{ .name = "TCOM", .value = "Mar de Grises" },
-                        .{ .name = "PERFORMER", .value = "Mar de Grises" },
-                        .{ .name = "ALBUM ARTIST", .value = "Mar de Grises" },
-                        .{ .name = "TIT2", .value = "Starmaker" },
-                        .{ .name = "TPE1", .value = "Mar de Grises" },
-                        .{ .name = "TALB", .value = "Streams Inwards" },
-                        .{ .name = "TCOM", .value = "" },
-                        .{ .name = "TPE3", .value = "" },
-                        .{ .name = "TPE2", .value = "Mar de Grises" },
-                        .{ .name = "TCON", .value = "Death Metal, doom metal, atmospheric" },
-                    },
+    try parseExpectedMetadata("data/id3v2.4_utf16_single_u8_delimeter.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 4,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x980,
+                .map = &[_]MetadataEntry{
+                    .{ .name = "TDRC", .value = "2010" },
+                    .{ .name = "TRCK", .value = "1/9" },
+                    .{ .name = "TPOS", .value = "1/1" },
+                    .{ .name = "TCOM", .value = "Mar de Grises" },
+                    .{ .name = "PERFORMER", .value = "Mar de Grises" },
+                    .{ .name = "ALBUM ARTIST", .value = "Mar de Grises" },
+                    .{ .name = "TIT2", .value = "Starmaker" },
+                    .{ .name = "TPE1", .value = "Mar de Grises" },
+                    .{ .name = "TALB", .value = "Streams Inwards" },
+                    .{ .name = "TCOM", .value = "" },
+                    .{ .name = "TPE3", .value = "" },
+                    .{ .name = "TPE2", .value = "Mar de Grises" },
+                    .{ .name = "TCON", .value = "Death Metal, doom metal, atmospheric" },
                 },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "id3v2.3 zero size frame" {
-    try parseExpectedMetadata(testing.allocator, "data/id3v2.3_zero_size_frame.mp3", .{
-        .all_id3v2 = &[_]ExpectedID3v2Metadata{
-            .{
-                .major_version = 3,
-                .metadata = .{
-                    .start_offset = 0x0,
-                    .end_offset = 0x1000,
-                    .map = &[_]MetadataEntry{
-                        .{ .name = "TFLT", .value = "audio/mp3" },
-                        .{ .name = "TIT2", .value = "the global cannibal" },
-                        .{ .name = "TALB", .value = "Global Cannibal, The" },
-                        .{ .name = "TRCK", .value = "1" },
-                        .{ .name = "TYER", .value = "2004" },
-                        .{ .name = "TCON", .value = "Crust" },
-                        .{ .name = "TPE1", .value = "Behind Enemy Lines" },
-                        .{ .name = "TENC", .value = "" },
-                        .{ .name = "TCOP", .value = "" },
-                        .{ .name = "TCOM", .value = "" },
-                        .{ .name = "TOPE", .value = "" },
-                    },
+    try parseExpectedMetadata("data/id3v2.3_zero_size_frame.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 3,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x1000,
+                .map = &[_]MetadataEntry{
+                    .{ .name = "TFLT", .value = "audio/mp3" },
+                    .{ .name = "TIT2", .value = "the global cannibal" },
+                    .{ .name = "TALB", .value = "Global Cannibal, The" },
+                    .{ .name = "TRCK", .value = "1" },
+                    .{ .name = "TYER", .value = "2004" },
+                    .{ .name = "TCON", .value = "Crust" },
+                    .{ .name = "TPE1", .value = "Behind Enemy Lines" },
+                    .{ .name = "TENC", .value = "" },
+                    .{ .name = "TCOP", .value = "" },
+                    .{ .name = "TCOM", .value = "" },
+                    .{ .name = "TOPE", .value = "" },
                 },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "id3v2.4 non-synchsafe frame size" {
-    try parseExpectedMetadata(testing.allocator, "data/id3v2.4_non_synchsafe_frame_size.mp3", .{
-        .all_id3v2 = &[_]ExpectedID3v2Metadata{
-            .{
-                .major_version = 4,
-                .metadata = .{
-                    .start_offset = 0x0,
-                    .end_offset = 0xD6C,
-                    .map = &[_]MetadataEntry{
-                        .{ .name = "TLEN", .value = "302813" },
-                        .{ .name = "TIT2", .value = "Inevitable" },
-                        .{ .name = "TPE1", .value = "Mushroomhead" },
-                        .{ .name = "TALB", .value = "M3" },
-                        .{ .name = "TRCK", .value = "4" },
-                        .{ .name = "TDRC", .value = "1999" },
-                        .{ .name = "TCON", .value = "(12)" },
-                    },
+    try parseExpectedMetadata("data/id3v2.4_non_synchsafe_frame_size.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 4,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0xD6C,
+                .map = &[_]MetadataEntry{
+                    .{ .name = "TLEN", .value = "302813" },
+                    .{ .name = "TIT2", .value = "Inevitable" },
+                    .{ .name = "TPE1", .value = "Mushroomhead" },
+                    .{ .name = "TALB", .value = "M3" },
+                    .{ .name = "TRCK", .value = "4" },
+                    .{ .name = "TDRC", .value = "1999" },
+                    .{ .name = "TCON", .value = "(12)" },
                 },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "id3v2.4 extended header with crc" {
-    try parseExpectedMetadata(testing.allocator, "data/id3v2.4_extended_header_crc.mp3", .{
-        .all_id3v2 = &[_]ExpectedID3v2Metadata{
-            .{
-                .major_version = 4,
-                .metadata = .{
-                    .start_offset = 0x0,
-                    .end_offset = 0x5F,
-                    .map = &[_]MetadataEntry{
-                        .{ .name = "TIT2", .value = "Test" },
-                        .{ .name = "TPE1", .value = "Test2" },
-                        .{ .name = "TPE2", .value = "Test2" },
-                    },
+    try parseExpectedMetadata("data/id3v2.4_extended_header_crc.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 4,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x5F,
+                .map = &[_]MetadataEntry{
+                    .{ .name = "TIT2", .value = "Test" },
+                    .{ .name = "TPE1", .value = "Test2" },
+                    .{ .name = "TPE2", .value = "Test2" },
                 },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "id3v2.4 footer" {
-    try parseExpectedMetadata(testing.allocator, "data/id3v2.4_footer.mp3", .{
-        .all_id3v2 = &[_]ExpectedID3v2Metadata{
-            .{
-                .major_version = 4,
-                .metadata = .{
-                    .start_offset = 0x0,
-                    .end_offset = 0x5D,
-                    .map = &[_]MetadataEntry{
-                        .{ .name = "TIT2", .value = "Test" },
-                        .{ .name = "TPE1", .value = "Test2" },
-                        .{ .name = "TPE2", .value = "Test2" },
-                    },
+    try parseExpectedMetadata("data/id3v2.4_footer.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 4,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x5D,
+                .map = &[_]MetadataEntry{
+                    .{ .name = "TIT2", .value = "Test" },
+                    .{ .name = "TPE1", .value = "Test2" },
+                    .{ .name = "TPE2", .value = "Test2" },
                 },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "id3v2.4 appended tag" {
-    try parseExpectedMetadata(testing.allocator, "data/id3v2.4_appended.mp3", .{
-        .all_id3v2 = &[_]ExpectedID3v2Metadata{
-            .{
-                .major_version = 4,
-                .metadata = .{
-                    .start_offset = 0x18,
-                    .end_offset = 0x75,
-                    .map = &[_]MetadataEntry{
-                        .{ .name = "TIT2", .value = "Test" },
-                        .{ .name = "TPE1", .value = "Test2" },
-                        .{ .name = "TPE2", .value = "Test2" },
-                    },
+    try parseExpectedMetadata("data/id3v2.4_appended.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 4,
+            .metadata = .{
+                .start_offset = 0x18,
+                .end_offset = 0x75,
+                .map = &[_]MetadataEntry{
+                    .{ .name = "TIT2", .value = "Test" },
+                    .{ .name = "TPE1", .value = "Test2" },
+                    .{ .name = "TPE2", .value = "Test2" },
                 },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "normal flac" {
-    try parseExpectedMetadata(testing.allocator, "data/flac.flac", .{
-        .all_id3v2 = null,
-        .id3v1 = null,
-        .flac = .{
+    try parseExpectedMetadata("data/flac.flac", .{ .tags = &.{
+        .{ .flac = .{
             .start_offset = 0x8,
             .end_offset = 0x14C,
             .map = &[_]MetadataEntry{
@@ -548,15 +492,13 @@ test "normal flac" {
                 .{ .name = "TRACKTOTAL", .value = "11" },
                 .{ .name = "TRACKNUMBER", .value = "02" },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "flac with multiple date fields" {
-    try parseExpectedMetadata(testing.allocator, "data/flac_multiple_dates.flac", .{
-        .all_id3v2 = null,
-        .id3v1 = null,
-        .flac = .{
+    try parseExpectedMetadata("data/flac_multiple_dates.flac", .{ .tags = &.{
+        .{ .flac = .{
             .start_offset = 0x8,
             .end_offset = 0x165,
             .map = &[_]MetadataEntry{
@@ -577,85 +519,77 @@ test "flac with multiple date fields" {
                 .{ .name = "DATE", .value = "2018-04-20" },
                 .{ .name = "TRACKNUMBER", .value = "1" },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "id3v2.4 unsynch text frames" {
-    try parseExpectedMetadata(testing.allocator, "data/id3v2.4_unsynch_text_frames.mp3", .{
-        .all_id3v2 = &[_]ExpectedID3v2Metadata{
-            .{
-                .major_version = 4,
-                .metadata = .{
-                    .start_offset = 0x0,
-                    .end_offset = 0x2170,
-                    .map = &[_]MetadataEntry{
-                        .{ .name = "TCON", .value = "Alternative" },
-                        .{ .name = "TDRC", .value = "1997" },
-                        .{ .name = "TRCK", .value = "1" },
-                        .{ .name = "TALB", .value = "Bruiser Queen" },
-                        .{ .name = "TPE1", .value = "Cake Like" },
-                        .{ .name = "TLEN", .value = "137000" },
-                        .{ .name = "TPUB", .value = "Vapor Records" },
-                        .{ .name = "TIT2", .value = "The New Girl" },
-                    },
+    try parseExpectedMetadata("data/id3v2.4_unsynch_text_frames.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 4,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x2170,
+                .map = &[_]MetadataEntry{
+                    .{ .name = "TCON", .value = "Alternative" },
+                    .{ .name = "TDRC", .value = "1997" },
+                    .{ .name = "TRCK", .value = "1" },
+                    .{ .name = "TALB", .value = "Bruiser Queen" },
+                    .{ .name = "TPE1", .value = "Cake Like" },
+                    .{ .name = "TLEN", .value = "137000" },
+                    .{ .name = "TPUB", .value = "Vapor Records" },
+                    .{ .name = "TIT2", .value = "The New Girl" },
                 },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "id3v2.3 malformed TXXX" {
-    try parseExpectedMetadata(testing.allocator, "data/id3v2.3_malformed_txxx.mp3", .{
-        .all_id3v2 = &[_]ExpectedID3v2Metadata{
-            .{
-                .major_version = 3,
-                .metadata = .{
-                    .start_offset = 0x0,
-                    .end_offset = 0x43,
-                    .map = &[_]MetadataEntry{},
-                },
+    try parseExpectedMetadata("data/id3v2.3_malformed_txxx.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 3,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x43,
+                .map = &[_]MetadataEntry{},
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "id3v2.4 malformed TXXX" {
-    try parseExpectedMetadata(testing.allocator, "data/id3v2.4_malformed_txxx.mp3", .{
-        .all_id3v2 = &[_]ExpectedID3v2Metadata{
-            .{
-                .major_version = 4,
-                .metadata = .{
-                    .start_offset = 0x0,
-                    .end_offset = 0x3B,
-                    .map = &[_]MetadataEntry{},
-                },
+    try parseExpectedMetadata("data/id3v2.4_malformed_txxx.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 4,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x3B,
+                .map = &[_]MetadataEntry{},
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "id3v2.3 unsynch tag edge case" {
     // Found via fuzzing. Has a full unsynch tag that has an end frame header with
     // unsynch bytes that extends to the end of the tag. This can trigger an
     // usize underflow if it's not protected against properly.
-    try parseExpectedMetadata(testing.allocator, "data/id3v2.3_unsynch_tag_edge_case.mp3", .{
-        .all_id3v2 = &[_]ExpectedID3v2Metadata{
-            .{
-                .major_version = 3,
-                .metadata = .{
-                    .start_offset = 0x0,
-                    .end_offset = 0x43,
-                    .map = &[_]MetadataEntry{},
-                },
+    try parseExpectedMetadata("data/id3v2.3_unsynch_tag_edge_case.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 3,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x43,
+                .map = &[_]MetadataEntry{},
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "ogg" {
-    try parseExpectedMetadata(testing.allocator, "data/vorbis.ogg", .{
-        .vorbis = ExpectedMetadata{
+    try parseExpectedMetadata("data/vorbis.ogg", .{ .tags = &.{
+        .{ .vorbis = .{
             .start_offset = 0x6d,
             .end_offset = 0x10e,
             .map = &[_]MetadataEntry{
@@ -666,13 +600,13 @@ test "ogg" {
                 .{ .name = "TRACKNUMBER", .value = "20" },
                 .{ .name = "COMMENT", .value = "http://www.sauve-qui-punk.org" },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "ogg with vorbis comment data spanning multiple pages" {
-    try parseExpectedMetadata(testing.allocator, "data/vorbis_comment_spanning_pages.ogg", .{
-        .vorbis = ExpectedMetadata{
+    try parseExpectedMetadata("data/vorbis_comment_spanning_pages.ogg", .{ .tags = &.{
+        .{ .vorbis = .{
             .start_offset = 0x5d,
             .end_offset = 0x11a,
             .map = &[_]MetadataEntry{
@@ -683,13 +617,13 @@ test "ogg with vorbis comment data spanning multiple pages" {
                 .{ .name = "TRACKNUMBER", .value = "20" },
                 .{ .name = "COMMENT", .value = "http://www.sauve-qui-punk.org" },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "ape" {
-    try parseExpectedMetadata(testing.allocator, "data/ape.mp3", .{
-        .ape_suffixed = ExpectedAPEMetadata{
+    try parseExpectedMetadata("data/ape.mp3", .{ .tags = &.{
+        .{ .ape = .{
             .version = 2000,
             .metadata = .{
                 .start_offset = 0x0,
@@ -701,40 +635,38 @@ test "ape" {
                     .{ .name = "REPLAYGAIN_TRACK_PEAK", .value = "2.003078" },
                 },
             },
-        },
-    });
+        } },
+    } });
 }
 
 test "ape with id3v2 and id3v1 tags" {
-    try parseExpectedMetadata(testing.allocator, "data/ape_and_id3.mp3", .{
-        .all_id3v2 = &[_]ExpectedID3v2Metadata{
-            .{
-                .major_version = 3,
-                .metadata = .{
-                    .start_offset = 0x0,
-                    .end_offset = 0x998,
-                    .map = &[_]MetadataEntry{
-                        .{ .name = "TLAN", .value = "rus" },
-                        .{ .name = "TRCK", .value = "1/7" },
-                        .{ .name = "TPE1", .value = "Axidance" },
-                        .{ .name = "Rip date", .value = "2012-08-10" },
-                        .{ .name = "TYER", .value = "2012" },
-                        .{ .name = "TDAT", .value = "0000" },
-                        .{ .name = "Source", .value = "Vinyl" },
-                        .{ .name = "TSSE", .value = "LAME v3.98.4 with preset -V0" },
-                        .{ .name = "Ripping tool", .value = "Sony Sound Forge Pro v10.0a" },
-                        .{ .name = "Release type", .value = "Split 12inch" },
-                        .{ .name = "TCON", .value = "Hardcore" },
-                        .{ .name = "Language 2-letter", .value = "RU" },
-                        .{ .name = "TPUB", .value = "pure heart" },
-                        .{ .name = "VA Artist", .value = "Axidance" },
-                        .{ .name = "TALB", .value = "Gattaca" },
-                        .{ .name = "TIT2", .value = "Aeon I - The Great Enemy" },
-                    },
+    try parseExpectedMetadata("data/ape_and_id3.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 3,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x998,
+                .map = &[_]MetadataEntry{
+                    .{ .name = "TLAN", .value = "rus" },
+                    .{ .name = "TRCK", .value = "1/7" },
+                    .{ .name = "TPE1", .value = "Axidance" },
+                    .{ .name = "Rip date", .value = "2012-08-10" },
+                    .{ .name = "TYER", .value = "2012" },
+                    .{ .name = "TDAT", .value = "0000" },
+                    .{ .name = "Source", .value = "Vinyl" },
+                    .{ .name = "TSSE", .value = "LAME v3.98.4 with preset -V0" },
+                    .{ .name = "Ripping tool", .value = "Sony Sound Forge Pro v10.0a" },
+                    .{ .name = "Release type", .value = "Split 12inch" },
+                    .{ .name = "TCON", .value = "Hardcore" },
+                    .{ .name = "Language 2-letter", .value = "RU" },
+                    .{ .name = "TPUB", .value = "pure heart" },
+                    .{ .name = "VA Artist", .value = "Axidance" },
+                    .{ .name = "TALB", .value = "Gattaca" },
+                    .{ .name = "TIT2", .value = "Aeon I - The Great Enemy" },
                 },
             },
-        },
-        .ape_suffixed = ExpectedAPEMetadata{
+        } },
+        .{ .ape = .{
             .version = 2000,
             .metadata = .{
                 .start_offset = 0x998,
@@ -759,8 +691,8 @@ test "ape with id3v2 and id3v1 tags" {
                     .{ .name = "Title", .value = "Aeon I - The Great Enemy" },
                 },
             },
-        },
-        .id3v1 = ExpectedMetadata{
+        } },
+        .{ .id3v1 = .{
             .start_offset = 0xba4,
             .end_offset = 0xc24,
             .map = &[_]MetadataEntry{
@@ -771,6 +703,6 @@ test "ape with id3v2 and id3v1 tags" {
                 .{ .name = "track", .value = "1" },
                 .{ .name = "genre", .value = "Hardcore Techno" },
             },
-        },
-    });
+        } },
+    } });
 }

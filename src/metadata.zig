@@ -198,6 +198,15 @@ pub const TypedMetadata = union(MetadataType) {
     ape: APEMetadata,
     flac: Metadata,
     vorbis: Metadata,
+
+    /// Convenience function to get the Metadata for any TypedMetadata
+    pub fn getMetadata(typed_meta: TypedMetadata) Metadata {
+        return switch (typed_meta) {
+            .id3v1, .flac, .vorbis => |val| val,
+            .id3v2 => |val| val.metadata,
+            .ape => |val| val.metadata,
+        };
+    }
 };
 
 pub const AllMetadata = struct {
