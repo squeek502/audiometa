@@ -76,6 +76,12 @@ pub fn build(b: *std.build.Builder) void {
     const extract_tag_run_step = b.step("run_extract_tag", "Run the extract tag tool");
     extract_tag_run_step.dependOn(&extract_tag_run.step);
 
+    const synchsafe_exe = b.addExecutable("synchsafe", "tools/synchsafe.zig");
+    synchsafe_exe.addPackagePath("audiometa", "src/audiometa.zig");
+    synchsafe_exe.setTarget(target);
+    synchsafe_exe.setBuildMode(mode);
+    synchsafe_exe.install();
+
     // Fuzz
 
     _ = addFuzzer(b, "fuzz", &.{}) catch unreachable;
