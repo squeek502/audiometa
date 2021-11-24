@@ -6,6 +6,9 @@ const io = std.io;
 /// buf must be at least as long as in
 pub fn decode(in: []const u8, buf: []u8) []u8 {
     assert(buf.len >= in.len);
+    if (in.len == 0) {
+        return buf[0..0];
+    }
     var i: usize = 0;
     var buf_i: usize = 0;
     while (i < in.len - 1) : ({
@@ -76,6 +79,16 @@ pub fn UnsynchCapableReader(comptime ReaderType: type) type {
 
 pub fn unsynchCapableReader(unsynch: bool, underlying_stream: anytype) UnsynchCapableReader(@TypeOf(underlying_stream)) {
     return .{ .child_reader = underlying_stream, .unsynch = unsynch };
+}
+
+test "unsynch decode zero length" {
+    const encoded = "";
+    var buf: [encoded.len]u8 = undefined;
+
+    var decoded = decode(encoded, &buf);
+
+    try std.testing.expectEqual(decoded.len, 0);
+    try std.testing.expectEqualSlices(u8, "", decoded);
 }
 
 test "unsynch decode" {
