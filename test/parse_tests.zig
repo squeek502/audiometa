@@ -2,6 +2,7 @@ const std = @import("std");
 const audiometa = @import("audiometa");
 const AllMetadata = audiometa.metadata.AllMetadata;
 const MetadataEntry = audiometa.metadata.MetadataMap.Entry;
+const FullTextEntry = audiometa.id3v2_data.FullTextMap.Entry;
 const testing = std.testing;
 const fmtUtf8SliceEscapeUpper = audiometa.util.fmtUtf8SliceEscapeUpper;
 const Allocator = std.mem.Allocator;
@@ -34,6 +35,15 @@ fn compareAllMetadata(all_expected: *const ExpectedAllMetadata, all_actual: *con
         switch (expected_tag) {
             .id3v2 => {
                 try testing.expectEqual(expected_tag.id3v2.major_version, actual_tag.id3v2.header.major_version);
+                try testing.expectEqual(expected_tag.id3v2.comments.len, actual_tag.id3v2.comments.entries.items.len);
+                for (expected_tag.id3v2.comments) |expected_comment, comment_i| {
+                    const actual_comment = actual_tag.id3v2.comments.entries.items[comment_i];
+                    try compareFullText(expected_comment, actual_comment);
+                }
+                for (expected_tag.id3v2.unsynchronized_lyrics) |expected_lyrics, lyrics_i| {
+                    const actual_lyrics = actual_tag.id3v2.unsynchronized_lyrics.entries.items[lyrics_i];
+                    try compareFullText(expected_lyrics, actual_lyrics);
+                }
             },
             .ape => {
                 try testing.expectEqual(expected_tag.ape.version, actual_tag.ape.header_or_footer.version);
@@ -42,6 +52,12 @@ fn compareAllMetadata(all_expected: *const ExpectedAllMetadata, all_actual: *con
         }
         try compareMetadata(expected_tag.getMetadata(), actual_tag.getMetadata());
     }
+}
+
+fn compareFullText(expected: FullTextEntry, actual: FullTextEntry) !void {
+    try testing.expectEqualStrings(expected.language, actual.language);
+    try testing.expectEqualStrings(expected.description, actual.description);
+    try testing.expectEqualStrings(expected.value, actual.value);
 }
 
 fn compareMetadata(expected: ExpectedMetadata, actual: audiometa.metadata.Metadata) !void {
@@ -116,6 +132,8 @@ const ExpectedAllMetadata = struct {
 const ExpectedID3v2Metadata = struct {
     metadata: ExpectedMetadata,
     major_version: u8,
+    comments: []const FullTextEntry = &[_]FullTextEntry{},
+    unsynchronized_lyrics: []const FullTextEntry = &[_]FullTextEntry{},
 };
 const ExpectedAPEMetadata = struct {
     version: u32,
@@ -196,6 +214,11 @@ test "id3v2.3 with UTF-16" {
                     .{ .name = "PERFORMER", .value = "Muga" },
                 },
             },
+            .comments = &.{.{
+                .language = "eng",
+                .description = "",
+                .value = "EAC V1.0 beta 2, Secure Mode, Test & Copy, AccurateRip, FLAC -8",
+            }},
         } },
         .{ .id3v1 = .{
             .start_offset = 0x4604,
@@ -280,6 +303,7 @@ test "id3v2.3 with full unsynch tag" {
                     .{ .name = "TSSE", .value = "flac.exe -V -8 -T \"artist=Disgust\" -T \"title=Intro\" -T \"album=Brutality of War\" -T \"date=\" -T \"tracknumber=01\" -T \"genre=Other\"" },
                 },
             },
+            .comments = &.{.{ .language = "eng", .description = "", .value = "Track 1" }},
         } },
     } });
 }
@@ -300,6 +324,28 @@ test "id3v2.3 with id3v2.2 frame ids" {
                     .{ .name = "TRCK", .value = "1" },
                     .{ .name = "TPE1", .value = "Extreme Noise Terror" },
                     .{ .name = "TCP", .value = "1" },
+                },
+            },
+            .comments = &.{
+                .{
+                    .language = "eng",
+                    .description = "",
+                    .value = "0",
+                },
+                .{
+                    .language = "eng",
+                    .description = "",
+                    .value = " 000028FD 00002EAF 000060E8 00008164 00005997 00005997 00008E2B 00008E97 000125C6 00011263",
+                },
+                .{
+                    .language = "eng",
+                    .description = "",
+                    .value = " 00000000 00000210 00000978 00000000003E6478 00000000 0021E72F 00000000 00000000 00000000 00000000 00000000 00000000",
+                },
+                .{
+                    .language = "eng",
+                    .description = "",
+                    .value = "www.deathwishinc.com",
                 },
             },
         } },
@@ -326,6 +372,11 @@ test "id3v2.3 with text frame with zero size" {
                     .{ .name = "TCOM", .value = "" },
                 },
             },
+            .comments = &.{.{
+                .language = "eng",
+                .description = "",
+                .value = "                            ",
+            }},
         } },
     } });
 }
@@ -343,6 +394,23 @@ test "id3v2.2" {
                     .{ .name = "TAL", .value = "escape" },
                     .{ .name = "TRK", .value = "1" },
                     .{ .name = "TEN", .value = "iTunes 8.0.1.11" },
+                },
+            },
+            .comments = &.{
+                .{
+                    .language = "eng",
+                    .description = "iTunPGAP",
+                    .value = "0",
+                },
+                .{
+                    .language = "eng",
+                    .description = "iTunNORM",
+                    .value = " 00000318 0000031C 00001032 00000A21 00014C8D 0001F4D0 00004B10 0000430B 0000E61A 00003A43",
+                },
+                .{
+                    .language = "eng",
+                    .description = "iTunSMPB",
+                    .value = " 00000000 00000210 00000726 00000000014408CA 00000000 0092E82A 00000000 00000000 00000000 00000000 00000000 00000000",
                 },
             },
         } },
@@ -396,6 +464,10 @@ test "id3v2.3 zero size frame" {
                     .{ .name = "TCOM", .value = "" },
                     .{ .name = "TOPE", .value = "" },
                 },
+            },
+            .comments = &.{
+                .{ .language = "eng", .description = "", .value = "" },
+                .{ .language = "\x00\x00\x00", .description = "", .value = "" },
             },
         } },
     } });

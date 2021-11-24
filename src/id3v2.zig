@@ -139,7 +139,7 @@ pub const FrameHeader = struct {
         return self.format_flags & @as(u8, 1 << 1) != 0;
     }
 
-    pub fn has_data_length_indicator(self: *const FrameHeader) bool {
+    pub fn hasDataLengthIndicator(self: *const FrameHeader) bool {
         return self.format_flags & @as(u8, 1) != 0;
     }
 
@@ -168,7 +168,193 @@ pub const TextEncoding = enum(u8) {
     pub fn fromByte(byte: u8) error{InvalidTextEncodingByte}!TextEncoding {
         return std.meta.intToEnum(TextEncoding, byte) catch error.InvalidTextEncodingByte;
     }
+
+    /// Reads `num_to_read` strings with the given encoding and appropriately sized nul terminators
+    /// Caller owns the returned strings and is responsible for freeing them.
+    pub fn readTextAlloc(encoding: TextEncoding, allocator: *Allocator, comptime num_to_read: usize, text_data_size: usize, reader: anytype, frame_header: *FrameHeader) ![num_to_read][]const u8 {
+        // TODO: Not very happy with this, felt like I was piling hacks upon
+        //       hacks to get it to work
+        var text_iterator: *TextIterator = blk: {
+            switch (encoding) {
+                .iso_8859_1 => {
+                    var encoded_text_iterator = try EncodedTextIterator(.iso_8859_1).init(allocator, text_data_size, reader, frame_header);
+                    break :blk &encoded_text_iterator.text_iterator;
+                },
+                .utf8 => {
+                    var encoded_text_iterator = try EncodedTextIterator(.utf8).init(allocator, text_data_size, reader, frame_header);
+                    break :blk &encoded_text_iterator.text_iterator;
+                },
+                .utf16_with_bom => {
+                    var encoded_text_iterator = try EncodedTextIterator(.utf16_with_bom).init(allocator, text_data_size, reader, frame_header);
+                    break :blk &encoded_text_iterator.text_iterator;
+                },
+                .utf16_no_bom => {
+                    var encoded_text_iterator = try EncodedTextIterator(.utf16_no_bom).init(allocator, text_data_size, reader, frame_header);
+                    break :blk &encoded_text_iterator.text_iterator;
+                },
+            }
+        };
+        defer text_iterator.deinit();
+
+        var texts: [num_to_read][]const u8 = undefined;
+        for (texts) |*val| {
+            val.* = &[_]u8{};
+        }
+        errdefer {
+            for (texts) |val| {
+                allocator.free(val);
+            }
+        }
+
+        var i: usize = 0;
+        while (i < num_to_read) : (i += 1) {
+            const text = (try text_iterator.next()) orelse return error.UnexpectedTextDataEnd;
+            texts[i] = try allocator.dupe(u8, text);
+        }
+
+        return texts;
+    }
 };
+
+const TextIterator = struct {
+    nextFn: fn (*TextIterator) error{ InvalidUTF16BOM, InvalidUTF16Data }!?[]const u8,
+    deinitFn: fn (*TextIterator) void,
+
+    pub fn deinit(self: *TextIterator) void {
+        return self.deinitFn(self);
+    }
+
+    pub fn next(self: *TextIterator) error{ InvalidUTF16BOM, InvalidUTF16Data }!?[]const u8 {
+        return self.nextFn(self);
+    }
+};
+
+pub fn EncodedTextIterator(comptime encoding: TextEncoding) type {
+    const CharType = switch (encoding) {
+        .iso_8859_1, .utf8 => u8,
+        .utf16_with_bom, .utf16_no_bom => u16,
+    };
+    return struct {
+        it: std.mem.SplitIterator(CharType),
+        raw_text_data: []const u8,
+        /// Buffer for UTF-8 data when converting from UTF-16
+        utf8_buf: []u8,
+        allocator: *Allocator,
+
+        text_iterator: TextIterator,
+
+        const Self = @This();
+
+        pub fn init(allocator: *Allocator, text_data_size: usize, reader: anytype, frame_header: *FrameHeader) !Self {
+            const char_align = @alignOf(CharType);
+            var raw_text_data = try allocator.allocWithOptions(u8, text_data_size, char_align, null);
+            errdefer allocator.free(raw_text_data);
+
+            try reader.readNoEof(raw_text_data);
+
+            var text_data = raw_text_data;
+            if (frame_header.unsynchronised()) {
+                // This alignCast is safe since unsynch decoding is guaranteed to
+                // never shift the beginning of the slice
+                text_data = @alignCast(char_align, unsynch.decodeInPlace(text_data));
+            }
+
+            if (CharType == u16) {
+                if (text_data.len % 2 != 0) {
+                    // there could be an erroneous trailing single char nul-terminator
+                    // or garbage. if so, just ignore it and pretend it doesn't exist
+                    text_data.len -= 1;
+                }
+            }
+
+            // If the text is latin1, then convert it to UTF-8
+            if (encoding == .iso_8859_1) {
+                var utf8_text = try latin1.latin1ToUtf8Alloc(allocator, text_data);
+
+                // the utf8 data is now the raw_text_data
+                allocator.free(raw_text_data);
+                raw_text_data = utf8_text;
+
+                text_data = utf8_text;
+            }
+
+            var processed_text_data = switch (CharType) {
+                u8 => text_data,
+                u16 => @alignCast(char_align, std.mem.bytesAsSlice(CharType, text_data)),
+                else => unreachable,
+            };
+
+            // if this is big endian, then swap everything to little endian up front
+            // TODO: I feel like this probably won't handle big endian native architectures correctly
+            if (encoding == .utf16_with_bom) {
+                if (processed_text_data.len == 0) {
+                    return error.UnexpectedTextDataEnd;
+                }
+                const bom = processed_text_data[0];
+                if (bom == 0xFFFE) {
+                    for (processed_text_data) |c, i| {
+                        processed_text_data[i] = @byteSwap(u16, c);
+                    }
+                }
+            }
+
+            const delim: []const CharType = if (CharType == u8) "\x00" else &[_]u16{0x0000};
+            const utf8_buf = switch (CharType) {
+                u8 => &[_]u8{},
+                // In the worst case, a single UTF-16 u16 can take up 3 bytes when
+                // converted to UTF-8 (e.g. 0xFFFF as UTF-16 is 0xEF 0xBF 0xBF as UTF-8)
+                // UTF-16 len * 3 should therefore be large enough to always store any
+                // conversion.
+                u16 => try allocator.alloc(u8, processed_text_data.len * 3),
+                else => unreachable,
+            };
+            errdefer allocator.free(utf8_buf);
+
+            return Self{
+                .allocator = allocator,
+                .it = std.mem.split(CharType, processed_text_data, delim),
+                .utf8_buf = utf8_buf,
+                .raw_text_data = raw_text_data,
+                .text_iterator = .{
+                    .nextFn = Self.next,
+                    .deinitFn = Self.deinit,
+                },
+            };
+        }
+
+        pub fn deinit(text_iterator: *TextIterator) void {
+            const self = @fieldParentPtr(Self, "text_iterator", text_iterator);
+            self.allocator.free(self.raw_text_data);
+            self.allocator.free(self.utf8_buf);
+        }
+
+        /// Always returns UTF-8.
+        /// When converting from UTF-16, the returned data is temporary
+        /// and will be overwritten on subsequent calls to `next`.
+        pub fn next(text_iterator: *TextIterator) error{ InvalidUTF16BOM, InvalidUTF16Data }!?[]const u8 {
+            const self = @fieldParentPtr(Self, "text_iterator", text_iterator);
+            var maybe_val = self.it.next();
+            if (CharType == u16) {
+                if (maybe_val) |*val_ptr| {
+                    var val = val_ptr.*;
+                    if (encoding == .utf16_with_bom) {
+                        // check for byte order mark and skip it
+                        if (val.len == 0 or val[0] != 0xFEFF) {
+                            return error.InvalidUTF16BOM;
+                        }
+                        val = val[1..];
+                    }
+                    var utf8_end = std.unicode.utf16leToUtf8(self.utf8_buf, val) catch return error.InvalidUTF16Data;
+                    return self.utf8_buf[0..utf8_end];
+                } else {
+                    return null;
+                }
+            } else {
+                return maybe_val;
+            }
+        }
+    };
+}
 
 pub fn skip(reader: anytype, seekable_stream: anytype) !void {
     const header = ID3Header.read(reader) catch {
@@ -178,12 +364,47 @@ pub fn skip(reader: anytype, seekable_stream: anytype) !void {
     return seekable_stream.seekBy(header.size);
 }
 
+pub const TextFrame = struct {
+    size_remaining: usize,
+    encoding: TextEncoding,
+};
+
+pub fn readTextFrameCommon(unsynch_capable_reader: anytype, frame_header: *FrameHeader) !TextFrame {
+    var text_data_size = frame_header.size;
+
+    if (frame_header.hasDataLengthIndicator()) {
+        if (text_data_size < 4) {
+            return error.UnexpectedTextDataEnd;
+        }
+        //const frame_data_length_raw = try unsynch_capable_reader.readIntBig(u32);
+        //const frame_data_length = synchsafe.decode(u32, frame_data_length_raw);
+        try unsynch_capable_reader.skipBytes(4, .{});
+        text_data_size -= 4;
+    }
+
+    if (text_data_size == 0) {
+        return error.UnexpectedTextDataEnd;
+    }
+    const encoding_byte = try unsynch_capable_reader.readByte();
+    const encoding = try TextEncoding.fromByte(encoding_byte);
+    text_data_size -= 1;
+
+    return TextFrame{
+        .size_remaining = text_data_size,
+        .encoding = encoding,
+    };
+}
+
 /// On error, seekable_stream cursor position will be wherever the error happened, it is
 /// up to the caller to determine what to do from there
 pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekable_stream: anytype, metadata_id3v2_container: *ID3v2Metadata, frame_header: *FrameHeader, remaining_tag_size: usize, full_unsynch: bool) !void {
+    _ = allocator;
+
     const id3_major_version = metadata_id3v2_container.header.major_version;
     var metadata = &metadata_id3v2_container.metadata;
     var metadata_map = &metadata.map;
+    var comments_map = &metadata_id3v2_container.comments;
+    var unsynchronized_lyrics_map = &metadata_id3v2_container.unsynchronized_lyrics;
 
     // this is technically not valid AFAIK but ffmpeg seems to accept
     // it without failing the parse, so just skip it
@@ -218,38 +439,16 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
         try seekable_stream.seekTo(cur_pos);
     }
 
-    // has a text encoding byte at the start
+    // Treat as NUL terminated because some v2.3 tags will (erroneously) use v2.2 IDs
+    // with a NUL as the 4th char, and we should handle those as NUL terminated
+    const id = std.mem.sliceTo(frame_header.idSlice(id3_major_version), '\x00');
+
     if (frame_header.id[0] == 'T') {
-        var text_data_size = frame_header.size;
-
-        if (frame_header.has_data_length_indicator()) {
-            if (text_data_size < 4) {
-                return error.UnexpectedTextDataEnd;
-            }
-            //const frame_data_length_raw = try unsynch_capable_reader.readIntBig(u32);
-            //const frame_data_length = synchsafe.decode(u32, frame_data_length_raw);
-            try unsynch_capable_reader.skipBytes(4, .{});
-            text_data_size -= 4;
-        }
-
-        if (text_data_size == 0) {
-            return error.UnexpectedTextDataEnd;
-        }
-        const encoding_byte = try unsynch_capable_reader.readByte();
-        const encoding = try TextEncoding.fromByte(encoding_byte);
-        text_data_size -= 1;
-
-        // Treat as NUL terminated because some v2.3 tags will use 3 length IDs
-        // with a NUL as the 4th char, and we should handle those as NUL terminated
-        const id = std.mem.sliceTo(frame_header.idSlice(id3_major_version), '\x00');
-        const user_defined_id = switch (id.len) {
-            3 => "TXX",
-            else => "TXXX",
-        };
-        const is_user_defined = std.mem.eql(u8, id, user_defined_id);
+        const text_frame = try readTextFrameCommon(unsynch_capable_reader, frame_header);
+        const is_user_defined = std.mem.eql(u8, id, if (id.len == 3) "TXX" else "TXXX");
 
         // we can handle this as a special case
-        if (text_data_size == 0) {
+        if (text_frame.size_remaining == 0) {
             // if this is a user-defined frame, then there's no way it's valid,
             // since there has to be a nul terminator between the name and the value
             if (is_user_defined) {
@@ -259,112 +458,59 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
             return metadata_map.put(id, "");
         }
 
-        switch (encoding) {
-            .iso_8859_1, .utf8 => {
-                var raw_text_data = try allocator.alloc(u8, text_data_size);
-                defer allocator.free(raw_text_data);
-
-                try unsynch_capable_reader.readNoEof(raw_text_data);
-
-                var text_data = raw_text_data;
-                if (frame_header.unsynchronised()) {
-                    text_data = unsynch.decodeInPlace(text_data);
+        if (is_user_defined) {
+            const texts = try text_frame.encoding.readTextAlloc(metadata_map.allocator, 2, text_frame.size_remaining, unsynch_capable_reader, frame_header);
+            errdefer metadata_map.allocator.free(texts[1]);
+            const entry = entry: {
+                errdefer metadata_map.allocator.free(texts[0]);
+                const entry = try metadata_map.getOrPutEntryNoDupe(texts[0]);
+                if (entry.found_existing) {
+                    metadata_map.allocator.free(texts[0]);
                 }
-
-                // If the text is latin1, then convert it to UTF-8
-                if (encoding == .iso_8859_1) {
-                    var utf8_text = try latin1.latin1ToUtf8Alloc(allocator, text_data);
-
-                    // the utf8 data is now the raw_text_data
-                    allocator.free(raw_text_data);
-                    raw_text_data = utf8_text;
-
-                    text_data = utf8_text;
-                }
-
-                var it = std.mem.split(u8, text_data, "\x00");
-
-                const text = it.next().?;
-                if (is_user_defined) {
-                    const value = it.next() orelse return error.InvalidUserDefinedTextFrame;
-                    try metadata_map.put(text, value);
-                } else {
-                    try metadata_map.put(id, text);
-                }
-            },
-            .utf16_with_bom, .utf16_no_bom => {
-                const u16_align = @alignOf(u16);
-                var raw_text_data = try allocator.allocWithOptions(u8, text_data_size, u16_align, null);
-                defer allocator.free(raw_text_data);
-
-                try unsynch_capable_reader.readNoEof(raw_text_data);
-
-                var text_data = raw_text_data;
-                if (frame_header.unsynchronised()) {
-                    // This alignCast is safe since unsynch decoding is guaranteed to
-                    // never shift the beginning of the slice
-                    text_data = @alignCast(u16_align, unsynch.decodeInPlace(text_data));
-                }
-
-                if (text_data.len % 2 != 0) {
-                    // there could be an erroneous trailing single char nul-terminator
-                    // or garbage. if so, just ignore it and pretend it doesn't exist
-                    text_data.len -= 1;
-                }
-
-                var utf16_text = @alignCast(u16_align, std.mem.bytesAsSlice(u16, text_data));
-
-                // if this is big endian, then swap everything to little endian up front
-                // TODO: I feel like this probably won't handle big endian native architectures correctly
-                if (encoding == .utf16_with_bom) {
-                    if (utf16_text.len == 0) {
-                        return error.UnexpectedTextDataEnd;
-                    }
-                    const bom = utf16_text[0];
-                    if (bom == 0xFFFE) {
-                        for (utf16_text) |c, i| {
-                            utf16_text[i] = @byteSwap(u16, c);
-                        }
-                    }
-                }
-
-                var it = std.mem.split(u16, utf16_text, &[_]u16{0x0000});
-
-                var text = it.next().?;
-                if (encoding == .utf16_with_bom) {
-                    // check for byte order mark and skip it
-                    if (text.len == 0 or text[0] != 0xFEFF) {
-                        return error.InvalidUTF16BOM;
-                    }
-                    text = text[1..];
-                }
-                var utf8_text = std.unicode.utf16leToUtf8Alloc(allocator, text) catch |e| switch (e) {
-                    error.OutOfMemory => |err| return err,
-                    else => return error.InvalidUTF16Data,
-                };
-                defer allocator.free(utf8_text);
-
-                if (is_user_defined) {
-                    var value = it.next() orelse return error.InvalidUserDefinedTextFrame;
-                    if (encoding == .utf16_with_bom) {
-                        // check for byte order mark and skip it
-                        if (value.len == 0 or value[0] != 0xFEFF) {
-                            return error.InvalidUTF16BOM;
-                        }
-                        value = value[1..];
-                    }
-                    var utf8_value = std.unicode.utf16leToUtf8Alloc(allocator, value) catch |e| switch (e) {
-                        error.OutOfMemory => |err| return err,
-                        else => return error.InvalidUTF16Data,
-                    };
-                    defer allocator.free(utf8_value);
-
-                    try metadata_map.put(utf8_text, utf8_value);
-                } else {
-                    try metadata_map.put(id, utf8_text);
-                }
-            },
+                break :entry entry;
+            };
+            try metadata_map.appendToEntryNoDupe(entry, texts[1]);
+        } else {
+            const texts = try text_frame.encoding.readTextAlloc(metadata_map.allocator, 1, text_frame.size_remaining, unsynch_capable_reader, frame_header);
+            errdefer metadata_map.allocator.free(texts[0]);
+            // we want to dupe the name, but not the value
+            const entry = try metadata_map.getOrPutEntry(id);
+            try metadata_map.appendToEntryNoDupe(entry, texts[0]);
         }
+    } else if (std.mem.eql(u8, id, if (id.len == 3) "ULT" else "USLT")) {
+        var text_frame = try readTextFrameCommon(unsynch_capable_reader, frame_header);
+        if (text_frame.size_remaining < 3) {
+            return error.UnexpectedTextDataEnd;
+        }
+        const language = try unsynch_capable_reader.readBytesNoEof(3);
+        text_frame.size_remaining -= 3;
+
+        const texts = try text_frame.encoding.readTextAlloc(allocator, 2, text_frame.size_remaining, unsynch_capable_reader, frame_header);
+        defer {
+            for (texts) |text| {
+                allocator.free(text);
+            }
+        }
+        const description = texts[0];
+        const value = texts[1];
+        try unsynchronized_lyrics_map.put(&language, description, value);
+    } else if (std.mem.eql(u8, id, if (id.len == 3) "COM" else "COMM")) {
+        var text_frame = try readTextFrameCommon(unsynch_capable_reader, frame_header);
+        if (text_frame.size_remaining < 3) {
+            return error.UnexpectedTextDataEnd;
+        }
+        const language = try unsynch_capable_reader.readBytesNoEof(3);
+        text_frame.size_remaining -= 3;
+
+        const texts = try text_frame.encoding.readTextAlloc(allocator, 2, text_frame.size_remaining, unsynch_capable_reader, frame_header);
+        defer {
+            for (texts) |text| {
+                allocator.free(text);
+            }
+        }
+        const description = texts[0];
+        const value = texts[1];
+        try comments_map.put(&language, description, value);
     } else {
         try frame_header.skipData(unsynch_capable_reader, seekable_stream, full_unsynch);
     }

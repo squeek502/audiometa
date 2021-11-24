@@ -33,7 +33,7 @@ pub fn main() anyerror!void {
                 },
                 .id3v2 => |*id3v2_meta| {
                     std.debug.print("\n#{}: ID3v2 Tag (v2.{d})\n=======================\n", .{ i + 1, id3v2_meta.header.major_version });
-                    id3v2_meta.metadata.map.dump();
+                    id3v2_meta.dump();
                 },
                 .ape => |*ape_meta| {
                     std.debug.print("\n#{}: APE Tag (v{d})\n=================\n", .{ i + 1, ape_meta.header_or_footer.version });

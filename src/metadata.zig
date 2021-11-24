@@ -1,5 +1,6 @@
 const std = @import("std");
 const id3v2 = @import("id3v2.zig");
+const id3v2_data = @import("id3v2_data.zig");
 const id3v1 = @import("id3v1.zig");
 const flac = @import("flac.zig");
 const vorbis = @import("vorbis.zig");
@@ -250,7 +251,7 @@ pub const AllMetadata = struct {
                 },
                 .id3v2 => |*id3v2_meta| {
                     std.debug.print("# ID3v2 v2.{d} 0x{x}-0x{x}\n", .{ id3v2_meta.header.major_version, id3v2_meta.metadata.start_offset, id3v2_meta.metadata.end_offset });
-                    id3v2_meta.metadata.map.dump();
+                    id3v2_meta.dump();
                 },
                 .ape => |*ape_meta| {
                     std.debug.print("# APEv{d} 0x{x}-0x{x}\n", .{ ape_meta.header_or_footer.version, ape_meta.metadata.start_offset, ape_meta.metadata.end_offset });
@@ -312,16 +313,34 @@ pub const AllID3v2Metadata = struct {
 pub const ID3v2Metadata = struct {
     metadata: Metadata,
     header: id3v2.ID3Header,
+    comments: id3v2_data.FullTextMap,
+    unsynchronized_lyrics: id3v2_data.FullTextMap,
 
     pub fn init(allocator: *Allocator, header: id3v2.ID3Header, start_offset: usize, end_offset: usize) ID3v2Metadata {
         return .{
             .metadata = Metadata.initWithOffsets(allocator, start_offset, end_offset),
             .header = header,
+            .comments = id3v2_data.FullTextMap.init(allocator),
+            .unsynchronized_lyrics = id3v2_data.FullTextMap.init(allocator),
         };
     }
 
     pub fn deinit(self: *ID3v2Metadata) void {
         self.metadata.deinit();
+        self.comments.deinit();
+        self.unsynchronized_lyrics.deinit();
+    }
+
+    pub fn dump(self: ID3v2Metadata) void {
+        self.metadata.map.dump();
+        if (self.comments.entries.items.len > 0) {
+            std.debug.print("-- COMM --\n", .{});
+            self.comments.dump();
+        }
+        if (self.unsynchronized_lyrics.entries.items.len > 0) {
+            std.debug.print("-- USLT --\n", .{});
+            self.unsynchronized_lyrics.dump();
+        }
     }
 };
 
@@ -411,31 +430,82 @@ pub const MetadataMap = struct {
         self.name_to_indexes.deinit(self.allocator);
     }
 
-    pub fn put(self: *MetadataMap, name: []const u8, value: []const u8) !void {
-        const indexes_entry = blk: {
+    pub fn getOrPutEntry(self: *MetadataMap, name: []const u8) !NameToIndexesMap.GetOrPutResult {
+        return blk: {
             if (self.name_to_indexes.getEntry(name)) |entry| {
-                break :blk entry;
+                break :blk NameToIndexesMap.GetOrPutResult{
+                    .key_ptr = entry.key_ptr,
+                    .value_ptr = entry.value_ptr,
+                    .found_existing = true,
+                };
             } else {
                 var name_dup = try self.allocator.dupe(u8, name);
                 errdefer self.allocator.free(name_dup);
 
                 const entry = try self.name_to_indexes.getOrPutValue(self.allocator, name_dup, IndexList{});
-                break :blk entry;
+                break :blk NameToIndexesMap.GetOrPutResult{
+                    .key_ptr = entry.key_ptr,
+                    .value_ptr = entry.value_ptr,
+                    .found_existing = false,
+                };
             }
         };
+    }
 
+    pub fn getOrPutEntryNoDupe(self: *MetadataMap, name: []const u8) !NameToIndexesMap.GetOrPutResult {
+        return blk: {
+            if (self.name_to_indexes.getEntry(name)) |entry| {
+                break :blk NameToIndexesMap.GetOrPutResult{
+                    .key_ptr = entry.key_ptr,
+                    .value_ptr = entry.value_ptr,
+                    .found_existing = true,
+                };
+            } else {
+                const entry = try self.name_to_indexes.getOrPutValue(self.allocator, name, IndexList{});
+                break :blk NameToIndexesMap.GetOrPutResult{
+                    .key_ptr = entry.key_ptr,
+                    .value_ptr = entry.value_ptr,
+                    .found_existing = false,
+                };
+            }
+        };
+    }
+
+    pub fn appendToEntry(self: *MetadataMap, entry: NameToIndexesMap.GetOrPutResult, value: []const u8) !void {
         const entry_index = entry_index: {
             const value_dup = try self.allocator.dupe(u8, value);
             errdefer self.allocator.free(value_dup);
 
             const entry_index = self.entries.items.len;
             try self.entries.append(self.allocator, Entry{
-                .name = indexes_entry.key_ptr.*,
+                .name = entry.key_ptr.*,
                 .value = value_dup,
             });
             break :entry_index entry_index;
         };
-        try indexes_entry.value_ptr.append(self.allocator, entry_index);
+        try entry.value_ptr.append(self.allocator, entry_index);
+    }
+
+    pub fn appendToEntryNoDupe(self: *MetadataMap, entry: NameToIndexesMap.GetOrPutResult, value: []const u8) !void {
+        const entry_index = entry_index: {
+            const entry_index = self.entries.items.len;
+            try self.entries.append(self.allocator, Entry{
+                .name = entry.key_ptr.*,
+                .value = value,
+            });
+            break :entry_index entry_index;
+        };
+        try entry.value_ptr.append(self.allocator, entry_index);
+    }
+
+    pub fn put(self: *MetadataMap, name: []const u8, value: []const u8) !void {
+        const indexes_entry = try self.getOrPutEntry(name);
+        try self.appendToEntry(indexes_entry, value);
+    }
+
+    pub fn putNoDupe(self: *MetadataMap, name: []const u8, value: []const u8) !void {
+        const indexes_entry = try self.getOrPutEntryNoDupe(name);
+        try self.appendToEntryNoDupe(indexes_entry, value);
     }
 
     pub fn putOrReplaceFirst(self: *MetadataMap, name: []const u8, new_value: []const u8) !void {
@@ -538,10 +608,14 @@ test "AllMetadata.getXOfType" {
     try metadata_buf.append(TypedMetadata{ .id3v2 = ID3v2Metadata{
         .metadata = undefined,
         .header = undefined,
+        .comments = undefined,
+        .unsynchronized_lyrics = undefined,
     } });
     try metadata_buf.append(TypedMetadata{ .id3v2 = ID3v2Metadata{
         .metadata = undefined,
         .header = undefined,
+        .comments = undefined,
+        .unsynchronized_lyrics = undefined,
     } });
     try metadata_buf.append(TypedMetadata{ .flac = undefined });
     try metadata_buf.append(TypedMetadata{ .id3v1 = undefined });

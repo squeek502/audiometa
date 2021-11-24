@@ -6,10 +6,9 @@ An audio metadata/tag reading library (currently supports ID3v2, ID3v1, FLAC, AP
 
 ## Limitations
 
-- No compression support, all compressed tags/frames are ignored
+- No compression support, all compressed tags/frames are ignored (haven't ever seen one of these in the wild)
 - Only supports text frames, so things like embedded images are skipped (maybe TODO)
-- No comment frame support in ID3v2 tags (TODO)
-- No unsynchronized/synchronized lyric/text transcription frame support in ID3v2 tags (TODO)
+- No synchronized lyric frame support in ID3v2 tags (maybe TODO)
 - No support for SEEK frame in ID3v2.4 tags (TODO)
 - No support for tag formats not listed above (TODO)
 - Only supports reading tags, no support for writing/modifying tags (maybe TODO)

@@ -18,9 +18,9 @@ pub fn zigMain() !void {
     defer allocator.free(data);
     var stream_source = std.io.StreamSource{ .buffer = std.io.fixedBufferStream(data) };
 
-    // default to 4kb minimum just in case we get very small files that need to allocate
+    // default to 50kb minimum just in case we get very small files that need to allocate
     // fairly large sizes for things like ArrayList(ID3v2Metadata)
-    const max_allocation_size = std.math.max(4096, data.len * 10);
+    const max_allocation_size = std.math.max(50 * 1024, data.len * 10);
     var max_size_allocator = &(MaxSizeAllocator.init(allocator, max_allocation_size).allocator);
 
     var metadata = try audiometa.metadata.readAll(max_size_allocator, &stream_source);
