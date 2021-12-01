@@ -25,8 +25,6 @@ fn parseExpectedMetadata(comptime path: []const u8, expected_meta: ExpectedAllMe
     };
 }
 
-// TODO: Update this to not be garbage, ExpectedAllMetadata should be updated
-// be more similar to AllMetadata
 fn compareAllMetadata(all_expected: *const ExpectedAllMetadata, all_actual: *const AllMetadata) !void {
     try testing.expectEqual(all_expected.tags.len, all_actual.tags.len);
     for (all_expected.tags) |expected_tag, i| {

@@ -11,7 +11,7 @@ pub fn main() !void {
     defer std.process.argsFree(allocator, args);
 
     if (args.len < 2) {
-        std.debug.print("usage: {s} <number>\n", .{args[0]});
+        std.debug.print("usage: {s} [-d] <number>\n\nEncodes by default, pass -d to decode.\n", .{args[0]});
         return;
     }
 
