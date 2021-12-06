@@ -657,6 +657,26 @@ test "id3v2.3 unsynch tag edge case" {
     } });
 }
 
+test "id3v2.4 text frame with multiple terminated values" {
+    try parseExpectedMetadata("data/id3v2.4_text_frame_with_multiple_terminated_values.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 4,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x1ba,
+                .map = &[_]MetadataEntry{
+                    .{ .name = "TCON", .value = "Hardcore" },
+                    .{ .name = "TDRC", .value = "2006" },
+                    .{ .name = "TRCK", .value = "2" },
+                    .{ .name = "TCOM", .value = "Aram Arslanian" },
+                    .{ .name = "TCOM", .value = "Todd Jones" },
+                    .{ .name = "COMMENT", .value = " 00001E45 000026CD 00006B50 00008F5A 0001AB0A 00001ED0 00008611 000087E7 0000976D 00002AC1" },
+                },
+            },
+        } },
+    } });
+}
+
 test "ogg" {
     try parseExpectedMetadata("data/vorbis.ogg", .{ .tags = &.{
         .{ .vorbis = .{

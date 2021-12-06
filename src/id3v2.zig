@@ -171,7 +171,7 @@ pub const TextEncoding = enum(u8) {
 
     /// Reads `num_to_read` strings with the given encoding and appropriately sized nul terminators
     /// Caller owns the returned strings and is responsible for freeing them.
-    pub fn readTextAlloc(encoding: TextEncoding, allocator: *Allocator, comptime num_to_read: usize, text_data_size: usize, reader: anytype, frame_header: *FrameHeader) ![num_to_read][]const u8 {
+    pub fn readTextFixed(encoding: TextEncoding, allocator: *Allocator, comptime num_to_read: usize, text_data_size: usize, reader: anytype, frame_header: *FrameHeader) ![num_to_read][]const u8 {
         // TODO: Not very happy with this, felt like I was piling hacks upon
         //       hacks to get it to work
         var text_iterator: *TextIterator = blk: {
@@ -208,24 +208,73 @@ pub const TextEncoding = enum(u8) {
 
         var i: usize = 0;
         while (i < num_to_read) : (i += 1) {
-            const text = (try text_iterator.next()) orelse return error.UnexpectedTextDataEnd;
+            const text = (try text_iterator.next(.optional)) orelse return error.UnexpectedTextDataEnd;
             texts[i] = try allocator.dupe(u8, text);
         }
 
         return texts;
     }
+
+    /// Reads all null-terminated strings with the given encoding and appropriately sized nul terminators.
+    /// Caller owns the returned slice and the strings in it strings and is responsible for freeing them.
+    pub fn readTextVariable(encoding: TextEncoding, allocator: *Allocator, likely_num_strings: usize, text_data_size: usize, reader: anytype, frame_header: *FrameHeader) ![][]const u8 {
+        // TODO: Not very happy with this, felt like I was piling hacks upon
+        //       hacks to get it to work
+        var text_iterator: *TextIterator = blk: {
+            switch (encoding) {
+                .iso_8859_1 => {
+                    var encoded_text_iterator = try EncodedTextIterator(.iso_8859_1).init(allocator, text_data_size, reader, frame_header);
+                    break :blk &encoded_text_iterator.text_iterator;
+                },
+                .utf8 => {
+                    var encoded_text_iterator = try EncodedTextIterator(.utf8).init(allocator, text_data_size, reader, frame_header);
+                    break :blk &encoded_text_iterator.text_iterator;
+                },
+                .utf16_with_bom => {
+                    var encoded_text_iterator = try EncodedTextIterator(.utf16_with_bom).init(allocator, text_data_size, reader, frame_header);
+                    break :blk &encoded_text_iterator.text_iterator;
+                },
+                .utf16_no_bom => {
+                    var encoded_text_iterator = try EncodedTextIterator(.utf16_no_bom).init(allocator, text_data_size, reader, frame_header);
+                    break :blk &encoded_text_iterator.text_iterator;
+                },
+            }
+        };
+        defer text_iterator.deinit();
+
+        var texts = try std.ArrayList([]const u8).initCapacity(allocator, likely_num_strings);
+        errdefer {
+            for (texts.items) |val| {
+                allocator.free(val);
+            }
+            texts.deinit();
+        }
+
+        while (try text_iterator.next(.required)) |text| {
+            const duped = try allocator.dupe(u8, text);
+            errdefer allocator.free(duped);
+            try texts.append(duped);
+        }
+
+        return texts.toOwnedSlice();
+    }
 };
 
 const TextIterator = struct {
-    nextFn: fn (*TextIterator) error{ InvalidUTF16BOM, InvalidUTF16Data }!?[]const u8,
+    nextFn: fn (*TextIterator, terminator: TerminatorType) error{ InvalidUTF16BOM, InvalidUTF16Data }!?[]const u8,
     deinitFn: fn (*TextIterator) void,
+
+    pub const TerminatorType = enum {
+        optional,
+        required,
+    };
 
     pub fn deinit(self: *TextIterator) void {
         return self.deinitFn(self);
     }
 
-    pub fn next(self: *TextIterator) error{ InvalidUTF16BOM, InvalidUTF16Data }!?[]const u8 {
-        return self.nextFn(self);
+    pub fn next(self: *TextIterator, terminator: TerminatorType) error{ InvalidUTF16BOM, InvalidUTF16Data }!?[]const u8 {
+        return self.nextFn(self, terminator);
     }
 };
 
@@ -235,7 +284,12 @@ pub fn EncodedTextIterator(comptime encoding: TextEncoding) type {
         .utf16_with_bom, .utf16_no_bom => u16,
     };
     return struct {
-        it: std.mem.SplitIterator(CharType),
+        text_data: []const CharType,
+        index: ?usize,
+        /// Index to consider the 'start', for the purposes of
+        /// determining whether or not a null-terminator should be
+        /// considered optional
+        start_index: usize = 0,
         raw_text_data: []const u8,
         /// Buffer for UTF-8 data when converting from UTF-16
         utf8_buf: []u8,
@@ -244,6 +298,7 @@ pub fn EncodedTextIterator(comptime encoding: TextEncoding) type {
         text_iterator: TextIterator,
 
         const Self = @This();
+        const delimiter: []const CharType = &[_]CharType{0};
 
         pub fn init(allocator: *Allocator, text_data_size: usize, reader: anytype, frame_header: *FrameHeader) !Self {
             const char_align = @alignOf(CharType);
@@ -298,7 +353,6 @@ pub fn EncodedTextIterator(comptime encoding: TextEncoding) type {
                 }
             }
 
-            const delim: []const CharType = if (CharType == u8) "\x00" else &[_]u16{0x0000};
             const utf8_buf = switch (CharType) {
                 u8 => &[_]u8{},
                 // In the worst case, a single UTF-16 u16 can take up 3 bytes when
@@ -312,7 +366,8 @@ pub fn EncodedTextIterator(comptime encoding: TextEncoding) type {
 
             return Self{
                 .allocator = allocator,
-                .it = std.mem.split(CharType, processed_text_data, delim),
+                .text_data = processed_text_data,
+                .index = 0,
                 .utf8_buf = utf8_buf,
                 .raw_text_data = raw_text_data,
                 .text_iterator = .{
@@ -328,30 +383,49 @@ pub fn EncodedTextIterator(comptime encoding: TextEncoding) type {
             self.allocator.free(self.utf8_buf);
         }
 
+        pub fn next(text_iterator: *TextIterator, terminator: TextIterator.TerminatorType) error{ InvalidUTF16BOM, InvalidUTF16Data }!?[]const u8 {
+            const self = @fieldParentPtr(Self, "text_iterator", text_iterator);
+            // The idea here is that we want to handle lists of null-terminated
+            // values but also potentially malformed single values, i.e.
+            // a zero length text with no null-termination
+            const start = self.index orelse return null;
+            const end = if (std.mem.indexOfPos(CharType, self.text_data, start, delimiter)) |delim_start| blk: {
+                self.index = delim_start + delimiter.len;
+                break :blk delim_start;
+            } else blk: {
+                const is_first_value_or_more_to_read = start == 0 or start < self.text_data.len;
+                if (terminator == .optional or is_first_value_or_more_to_read) {
+                    self.index = null;
+                    break :blk self.text_data.len;
+                } else {
+                    // if a terminator is required and we're not at the start,
+                    // then the lack of a null-terminator should return null immediately
+                    // since there's no value to be read, i.e. "a\x00" should not give
+                    // "a" and then ""
+                    return null;
+                }
+            };
+            const utf8_val = try self.nextToUtf8(self.text_data[start..end]);
+            return utf8_val;
+        }
+
         /// Always returns UTF-8.
         /// When converting from UTF-16, the returned data is temporary
         /// and will be overwritten on subsequent calls to `next`.
-        pub fn next(text_iterator: *TextIterator) error{ InvalidUTF16BOM, InvalidUTF16Data }!?[]const u8 {
-            const self = @fieldParentPtr(Self, "text_iterator", text_iterator);
-            var maybe_val = self.it.next();
+        fn nextToUtf8(self: Self, val: []const CharType) error{ InvalidUTF16BOM, InvalidUTF16Data }![]const u8 {
             if (CharType == u16) {
-                if (maybe_val) |*val_ptr| {
-                    var val = val_ptr.*;
-                    if (encoding == .utf16_with_bom) {
-                        // check for byte order mark and skip it
-                        if (val.len == 0 or val[0] != 0xFEFF) {
-                            return error.InvalidUTF16BOM;
-                        }
-                        val = val[1..];
+                var val_no_bom = val;
+                if (encoding == .utf16_with_bom) {
+                    // check for byte order mark and skip it
+                    if (val.len == 0 or val[0] != 0xFEFF) {
+                        return error.InvalidUTF16BOM;
                     }
-                    var utf8_end = std.unicode.utf16leToUtf8(self.utf8_buf, val) catch return error.InvalidUTF16Data;
-                    return self.utf8_buf[0..utf8_end];
-                } else {
-                    return null;
+                    val_no_bom = val[1..];
                 }
-            } else {
-                return maybe_val;
+                const utf8_end = std.unicode.utf16leToUtf8(self.utf8_buf, val_no_bom) catch return error.InvalidUTF16Data;
+                return self.utf8_buf[0..utf8_end];
             }
+            return val;
         }
     };
 }
@@ -459,7 +533,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
         }
 
         if (is_user_defined) {
-            const texts = try text_frame.encoding.readTextAlloc(metadata_map.allocator, 2, text_frame.size_remaining, unsynch_capable_reader, frame_header);
+            const texts = try text_frame.encoding.readTextFixed(metadata_map.allocator, 2, text_frame.size_remaining, unsynch_capable_reader, frame_header);
             errdefer metadata_map.allocator.free(texts[1]);
             const entry = entry: {
                 errdefer metadata_map.allocator.free(texts[0]);
@@ -471,11 +545,29 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
             };
             try metadata_map.appendToEntryNoDupe(entry, texts[1]);
         } else {
-            const texts = try text_frame.encoding.readTextAlloc(metadata_map.allocator, 1, text_frame.size_remaining, unsynch_capable_reader, frame_header);
-            errdefer metadata_map.allocator.free(texts[0]);
+            // From section 4.2 of https://id3.org/id3v2.4.0-frames:
+            // > All text information frames supports multiple strings,
+            // > stored as a null separated list, where null is reperesented
+            // > by the termination code for the charater encoding.
+            //
+            // This technically only applies to 2.4, but we do it unconditionally
+            // to accomidate buggy encoders that encode 2.3 as if it were 2.4.
+            // TODO: Is this behavior for 2.3 and 2.2 okay?
+            const texts = try text_frame.encoding.readTextVariable(metadata_map.allocator, 1, text_frame.size_remaining, unsynch_capable_reader, frame_header);
+            defer metadata_map.allocator.free(texts);
+            errdefer {
+                for (texts) |text| {
+                    metadata_map.allocator.free(text);
+                }
+            }
             // we want to dupe the name, but not the value
             const entry = try metadata_map.getOrPutEntry(id);
-            try metadata_map.appendToEntryNoDupe(entry, texts[0]);
+            for (texts) |text, i| {
+                try metadata_map.appendToEntryNoDupe(entry, text);
+                // set to a zero-length slice to avoid double frees during
+                // errdefer if only some of the appends succeeded
+                texts[i] = &[_]u8{};
+            }
         }
     } else if (std.mem.eql(u8, id, if (id.len == 3) "ULT" else "USLT")) {
         var text_frame = try readTextFrameCommon(unsynch_capable_reader, frame_header);
@@ -485,7 +577,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
         const language = try unsynch_capable_reader.readBytesNoEof(3);
         text_frame.size_remaining -= 3;
 
-        const texts = try text_frame.encoding.readTextAlloc(allocator, 2, text_frame.size_remaining, unsynch_capable_reader, frame_header);
+        const texts = try text_frame.encoding.readTextFixed(allocator, 2, text_frame.size_remaining, unsynch_capable_reader, frame_header);
         defer {
             for (texts) |text| {
                 allocator.free(text);
@@ -502,7 +594,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
         const language = try unsynch_capable_reader.readBytesNoEof(3);
         text_frame.size_remaining -= 3;
 
-        const texts = try text_frame.encoding.readTextAlloc(allocator, 2, text_frame.size_remaining, unsynch_capable_reader, frame_header);
+        const texts = try text_frame.encoding.readTextFixed(allocator, 2, text_frame.size_remaining, unsynch_capable_reader, frame_header);
         defer {
             for (texts) |text| {
                 allocator.free(text);
@@ -696,4 +788,45 @@ pub fn readAll(allocator: *Allocator, reader: anytype, seekable_stream: anytype)
         .allocator = allocator,
         .tags = metadata_buf.toOwnedSlice(),
     };
+}
+
+fn testTextIterator(comptime encoding: TextEncoding, input: []const u8, expected_strings: []const []const u8) !void {
+    var fbs = std.io.fixedBufferStream(input);
+    var dummy_frame_header = FrameHeader{
+        .id = undefined,
+        .size = undefined,
+        .raw_size = undefined,
+        .status_flags = 0,
+        .format_flags = 0,
+    };
+
+    const texts = try encoding.readTextVariable(std.testing.allocator, 1, input.len, fbs.reader(), &dummy_frame_header);
+    defer {
+        for (texts) |text| {
+            std.testing.allocator.free(text);
+        }
+        std.testing.allocator.free(texts);
+    }
+
+    try std.testing.expectEqual(expected_strings.len, texts.len);
+    for (expected_strings) |expected_string, i| {
+        try std.testing.expectEqualStrings(expected_string, texts[i]);
+    }
+}
+
+test "UTF-8 EncodedTextIterator null terminated lists" {
+    try testTextIterator(.utf8, "", &[_][]const u8{""});
+    try testTextIterator(.utf8, "\x00", &[_][]const u8{""});
+    try testTextIterator(.utf8, "hello", &[_][]const u8{"hello"});
+    try testTextIterator(.utf8, "hello\x00", &[_][]const u8{"hello"});
+    try testTextIterator(.utf8, "hello\x00\x00", &[_][]const u8{ "hello", "" });
+}
+
+test "UTF-16 EncodedTextIterator null terminated lists" {
+    try testTextIterator(.utf16_with_bom, &[_]u8{ '\xFF', '\xFE', '\x00', '\x00' }, &[_][]const u8{""});
+    try testTextIterator(.utf16_with_bom, &[_]u8{ '\xFF', '\xFE' }, &[_][]const u8{""});
+    try testTextIterator(.utf16_no_bom, std.mem.sliceAsBytes(std.unicode.utf8ToUtf16LeStringLiteral("\x00")), &[_][]const u8{""});
+    try testTextIterator(.utf16_no_bom, std.mem.sliceAsBytes(std.unicode.utf8ToUtf16LeStringLiteral("hello")), &[_][]const u8{"hello"});
+    try testTextIterator(.utf16_no_bom, std.mem.sliceAsBytes(std.unicode.utf8ToUtf16LeStringLiteral("hello\x00")), &[_][]const u8{"hello"});
+    try testTextIterator(.utf16_no_bom, std.mem.sliceAsBytes(std.unicode.utf8ToUtf16LeStringLiteral("hello\x00\x00")), &[_][]const u8{ "hello", "" });
 }
