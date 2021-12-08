@@ -465,6 +465,28 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
 
             const value = (try text_iterator.next(.optional)) orelse return error.UnexpectedTextDataEnd;
             try metadata_map.appendToEntry(entry, value);
+
+            // The spec somewhat explicitly says that the following should not happen,
+            // but TagLib does not follow it and I think it makes some sense to
+            // not entirely drop the information if there are TXXX frames that
+            // have values that are encoded as a null-terminated list (a la other
+            // text identification frames)
+            //
+            // Here's the relevant portions of the spec:
+            // - ID3v2.2 (https://id3.org/id3v2-00):
+            // > If the textstring is followed by a termination ($00 (00)) all
+            // > the following information should be ignored and not be displayed.
+            // - ID3v2.3 (https://id3.org/id3v2.3.0#Text_information_frames)
+            // > If the textstring is followed by a termination ($00 (00)) all
+            // > the following information should be ignored and not be displayed.
+            // - ID3v2.4 (https://id3.org/id3v2.4.0-frames)
+            // > 4.2.6.   User defined text information frame
+            // >    This frame is intended for one-string text information
+            //
+            // TODO: Should this actually be here?
+            while (try text_iterator.next(.required)) |text| {
+                try metadata_map.appendToEntry(entry, text);
+            }
         } else {
             // From section 4.2 of https://id3.org/id3v2.4.0-frames:
             // > All text information frames supports multiple strings,
