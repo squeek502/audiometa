@@ -175,10 +175,6 @@ pub const TextEncoding = enum(u8) {
             .utf16_with_bom, .utf16_no_bom => 2,
         };
     }
-
-    pub fn delimiter(comptime T: type) []const T {
-        return &[_]T{0};
-    }
 };
 
 pub const EncodedTextIterator = struct {
@@ -290,17 +286,26 @@ pub const EncodedTextIterator = struct {
         const end: usize = end: {
             switch (self.encoding.charSize()) {
                 1 => {
-                    const delimiter = TextEncoding.delimiter(u8);
-                    if (std.mem.indexOfPos(u8, self.text_bytes, start, delimiter)) |delim_start| {
-                        self.index = delim_start + delimiter.len;
+                    const delimiter: u8 = 0;
+                    if (std.mem.indexOfScalarPos(u8, self.text_bytes, start, delimiter)) |delim_start| {
+                        self.index = delim_start + 1;
+                        while (self.index.? < self.text_bytes.len and self.text_bytes[self.index.?] == delimiter) {
+                            self.index.? += 1;
+                        }
                         break :end delim_start;
                     }
                 },
                 2 => {
                     var bytes_as_utf16 = @alignCast(u16_align, std.mem.bytesAsSlice(u16, self.text_bytes));
-                    const delimiter = TextEncoding.delimiter(u16);
-                    if (std.mem.indexOfPos(u16, bytes_as_utf16, start / 2, delimiter)) |delim_start| {
-                        self.index = (delim_start + delimiter.len) * 2;
+                    const delimiter: u16 = 0;
+                    if (std.mem.indexOfScalarPos(u16, bytes_as_utf16, start / 2, delimiter)) |delim_start| {
+                        self.index = index: {
+                            var index_past_all_delimeters = delim_start + 1;
+                            while (index_past_all_delimeters < bytes_as_utf16.len and bytes_as_utf16[index_past_all_delimeters] == delimiter) {
+                                index_past_all_delimeters += 1;
+                            }
+                            break :index index_past_all_delimeters * 2;
+                        };
                         break :end delim_start * 2;
                     }
                 },
@@ -746,8 +751,12 @@ fn testTextIterator(comptime encoding: TextEncoding, input: []const u8, expected
     defer text_iterator.deinit();
 
     var num_texts: usize = 0;
-    for (expected_strings) |expected_string| {
-        const text = (try text_iterator.next(.required)).?;
+    while (try text_iterator.next(.required)) |text| {
+        if (num_texts >= expected_strings.len) {
+            std.debug.print("Unexpected value past the expected values: '{s}'\n", .{fmtUtf8SliceEscapeUpper(text)});
+            return error.TooManyValues;
+        }
+        const expected_string = expected_strings[num_texts];
         try std.testing.expectEqualStrings(expected_string, text);
         num_texts += 1;
     }
@@ -759,7 +768,14 @@ test "UTF-8 EncodedTextIterator null terminated lists" {
     try testTextIterator(.utf8, "\x00", &[_][]const u8{""});
     try testTextIterator(.utf8, "hello", &[_][]const u8{"hello"});
     try testTextIterator(.utf8, "hello\x00", &[_][]const u8{"hello"});
-    try testTextIterator(.utf8, "hello\x00\x00", &[_][]const u8{ "hello", "" });
+    // empty values past the first are ignored
+    try testTextIterator(.utf8, "hello\x00\x00", &[_][]const u8{"hello"});
+    // but non-empty ones are not
+    try testTextIterator(.utf8, "hello\x00world\x00", &[_][]const u8{ "hello", "world" });
+    // TODO: Re-evaluate the test cases below, I'm not sure what the best
+    // thing to do is for this sort of thing
+    try testTextIterator(.utf8, "hello\x00world", &[_][]const u8{ "hello", "world" });
+    try testTextIterator(.utf8, "\x00world", &[_][]const u8{ "", "world" });
 }
 
 test "UTF-16 EncodedTextIterator null terminated lists" {
@@ -768,5 +784,10 @@ test "UTF-16 EncodedTextIterator null terminated lists" {
     try testTextIterator(.utf16_no_bom, std.mem.sliceAsBytes(std.unicode.utf8ToUtf16LeStringLiteral("\x00")), &[_][]const u8{""});
     try testTextIterator(.utf16_no_bom, std.mem.sliceAsBytes(std.unicode.utf8ToUtf16LeStringLiteral("hello")), &[_][]const u8{"hello"});
     try testTextIterator(.utf16_no_bom, std.mem.sliceAsBytes(std.unicode.utf8ToUtf16LeStringLiteral("hello\x00")), &[_][]const u8{"hello"});
-    try testTextIterator(.utf16_no_bom, std.mem.sliceAsBytes(std.unicode.utf8ToUtf16LeStringLiteral("hello\x00\x00")), &[_][]const u8{ "hello", "" });
+    try testTextIterator(.utf16_no_bom, std.mem.sliceAsBytes(std.unicode.utf8ToUtf16LeStringLiteral("hello\x00\x00")), &[_][]const u8{"hello"});
+    try testTextIterator(.utf16_no_bom, std.mem.sliceAsBytes(std.unicode.utf8ToUtf16LeStringLiteral("hello\x00world\x00")), &[_][]const u8{ "hello", "world" });
+    // TODO: Re-evaluate the test cases below, I'm not sure what the best
+    // thing to do is for this sort of thing
+    try testTextIterator(.utf16_no_bom, std.mem.sliceAsBytes(std.unicode.utf8ToUtf16LeStringLiteral("hello\x00world")), &[_][]const u8{ "hello", "world" });
+    try testTextIterator(.utf16_no_bom, std.mem.sliceAsBytes(std.unicode.utf8ToUtf16LeStringLiteral("\x00world")), &[_][]const u8{ "", "world" });
 }
