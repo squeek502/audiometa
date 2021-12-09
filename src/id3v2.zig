@@ -335,8 +335,15 @@ pub const EncodedTextIterator = struct {
             const bytes_as_utf16 = @alignCast(u16_align, std.mem.bytesAsSlice(u16, val_bytes));
             var val_no_bom = bytes_as_utf16;
             if (self.encoding == .utf16_with_bom) {
+                // If it's zero-length and missing the BOM then that's
+                // ok, there seem to be some encoders that encode empty
+                // COMM descriptions this way. It's against what the spec
+                // says, but oh well.
+                if (bytes_as_utf16.len == 0) {
+                    return val_bytes[0..0];
+                }
                 // check for byte order mark and skip it
-                if (bytes_as_utf16.len == 0 or bytes_as_utf16[0] != 0xFEFF) {
+                if (bytes_as_utf16[0] != 0xFEFF) {
                     return error.InvalidUTF16BOM;
                 }
                 val_no_bom = bytes_as_utf16[1..];
@@ -790,4 +797,7 @@ test "UTF-16 EncodedTextIterator null terminated lists" {
     // thing to do is for this sort of thing
     try testTextIterator(.utf16_no_bom, std.mem.sliceAsBytes(std.unicode.utf8ToUtf16LeStringLiteral("hello\x00world")), &[_][]const u8{ "hello", "world" });
     try testTextIterator(.utf16_no_bom, std.mem.sliceAsBytes(std.unicode.utf8ToUtf16LeStringLiteral("\x00world")), &[_][]const u8{ "", "world" });
+
+    // Allow missing BOM if the string is zero-length
+    try testTextIterator(.utf16_with_bom, &[_]u8{ '\x00', '\x00' }, &[_][]const u8{""});
 }
