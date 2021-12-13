@@ -109,7 +109,7 @@ pub const FullTextMap = struct {
 
     pub fn dump(self: *const FullTextMap) void {
         for (self.entries.items) |entry| {
-            std.debug.print("{s},{s}={s}\n", .{ fmtUtf8SliceEscapeUpper(entry.language), fmtUtf8SliceEscapeUpper(entry.description), fmtUtf8SliceEscapeUpper(entry.value) });
+            std.debug.print("{s},{s}={s}\n", .{ std.fmt.fmtSliceEscapeUpper(entry.language), fmtUtf8SliceEscapeUpper(entry.description), fmtUtf8SliceEscapeUpper(entry.value) });
         }
     }
 };
