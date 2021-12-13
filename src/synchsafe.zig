@@ -68,6 +68,19 @@ pub fn encode(comptime T: type, x: T) EncodedType(T) {
     return out;
 }
 
+/// Returns true if the given slice has no non-synchsafe
+/// bytes within it.
+pub fn isSliceSynchsafe(bytes: []const u8) bool {
+    for (bytes) |byte| {
+        // if any byte has its most significant bit set,
+        // then it's not synchsafe
+        if (byte & 0x80 != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 fn testEncodeAndDecode(comptime T: type, encoded: T, decoded: DecodedType(T)) !void {
     try std.testing.expectEqual(encoded, encode(DecodedType(T), decoded));
     try std.testing.expectEqual(decoded, decode(T, encoded));
@@ -87,4 +100,9 @@ test "encoded and decoded types" {
     try std.testing.expectEqual(u32, EncodedType(u28));
     try std.testing.expectEqual(u16, EncodedType(u14));
     try std.testing.expectEqual(u24, EncodedType(u15));
+}
+
+test "is synchsafe" {
+    try std.testing.expect(isSliceSynchsafe(&[_]u8{ 0, 0, 0, 127 }));
+    try std.testing.expect(!isSliceSynchsafe(&[_]u8{ 0, 0, 0, 255 }));
 }

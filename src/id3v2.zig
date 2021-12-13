@@ -135,6 +135,16 @@ pub const FrameHeader = struct {
         };
     }
 
+    /// Returns true if all values are zero, which is indicative that
+    /// the frame header is part of padding after the tag.
+    pub fn couldBePadding(self: *const FrameHeader) bool {
+        if (!std.mem.eql(u8, &self.id, &[_]u8{ 0, 0, 0, 0 })) return false;
+        if (self.raw_size != 0) return false;
+        if (self.status_flags != 0) return false;
+        if (self.format_flags != 0) return false;
+        return true;
+    }
+
     pub fn unsynchronised(self: *const FrameHeader) bool {
         return self.format_flags & @as(u8, 1 << 1) != 0;
     }
@@ -416,25 +426,56 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
     // so we need to double check
     if (id3_major_version >= 4) {
         const cur_pos = try seekable_stream.getPos();
-        synchsafe_check: {
-            const after_frame_u32 = cur_pos + frame_header.raw_size;
+        frame_header.size = best_guess_size: {
+            const raw_size_bytes = std.mem.asBytes(&frame_header.raw_size);
+            const was_raw_size_synchsafe = synchsafe.isSliceSynchsafe(raw_size_bytes);
+
+            // If the raw integer's bytes weren't even synchsafe to begin with,
+            // then we can assume that the raw integer is going to be more correct
+            // than the synchsafe decoded version.
+            if (!was_raw_size_synchsafe) {
+                break :best_guess_size frame_header.raw_size;
+            }
+
+            // The synchsafe decoded integer will always be equal to or smaller
+            // than the raw version, so if we hit EOF or padding, then we can assume
+            // that the raw version won't give us anything better, and therefore we
+            // should use the synchsafe decoded version.
             const after_frame_synchsafe = cur_pos + frame_header.size;
+            seekable_stream.seekTo(after_frame_synchsafe) catch {
+                break :best_guess_size frame_header.size;
+            };
+            const next_frame_header_synchsafe = FrameHeader.read(unsynch_capable_reader, id3_major_version) catch {
+                break :best_guess_size frame_header.size;
+            };
 
-            seekable_stream.seekTo(after_frame_synchsafe) catch break :synchsafe_check;
-            const next_frame_header_synchsafe = FrameHeader.read(unsynch_capable_reader, id3_major_version) catch break :synchsafe_check;
-
+            // If the synchsafe decoded version gives us a valid header
+            // or a header that could be part of padding, then we should definitely
+            // use the synchsafe version.
             if (next_frame_header_synchsafe.validate(id3_major_version, remaining_tag_size)) {
-                break :synchsafe_check;
+                break :best_guess_size frame_header.size;
             } else |_| {}
+            if (next_frame_header_synchsafe.couldBePadding()) {
+                break :best_guess_size frame_header.size;
+            }
 
-            seekable_stream.seekTo(after_frame_u32) catch break :synchsafe_check;
-            const next_frame_header_u32 = FrameHeader.read(unsynch_capable_reader, id3_major_version) catch break :synchsafe_check;
+            // At this point, we know that the synchsafe-decoded version will not
+            // give us a valid header afterwards, so we can assume that the raw size
+            // is at least worth trying. We need to check that the raw size
+            // won't give EOF while reading the frame, though, since we don't
+            // want to invoke a false-positive EOF.
+            //
+            // TODO: This needs to be thought through more. 'Trying' the raw size
+            // could lead to larger reads than necessary when the raw size doesn't
+            // lead to EOF. It's an edge case of an edge case, but there's probably
+            // something better that can be done about it.
+            const after_frame_u32 = cur_pos + frame_header.raw_size;
+            seekable_stream.seekTo(after_frame_u32) catch {
+                break :best_guess_size frame_header.size;
+            };
 
-            next_frame_header_u32.validate(id3_major_version, remaining_tag_size) catch break :synchsafe_check;
-
-            // if we got here then this is the better size
-            frame_header.size = frame_header.raw_size;
-        }
+            break :best_guess_size frame_header.raw_size;
+        };
         try seekable_stream.seekTo(cur_pos);
     }
 
