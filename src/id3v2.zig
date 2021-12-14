@@ -188,7 +188,7 @@ pub const TextEncoding = enum(u8) {
 };
 
 pub const EncodedTextIterator = struct {
-    text_bytes: []const u8,
+    text_bytes: []u8,
     index: ?usize,
     encoding: TextEncoding,
     raw_text_data: []const u8,
@@ -240,21 +240,6 @@ pub const EncodedTextIterator = struct {
             raw_text_data = utf8_text;
 
             text_bytes = utf8_text;
-        }
-
-        // if this is big endian, then swap everything to little endian up front
-        // TODO: I feel like this probably won't handle big endian native architectures correctly
-        if (options.encoding == .utf16_with_bom) {
-            var bytes_as_utf16 = std.mem.bytesAsSlice(u16, text_bytes);
-            if (text_bytes.len == 0) {
-                return error.UnexpectedTextDataEnd;
-            }
-            const bom = bytes_as_utf16[0];
-            if (bom == 0xFFFE) {
-                for (bytes_as_utf16) |c, i| {
-                    bytes_as_utf16[i] = @byteSwap(u16, c);
-                }
-            }
         }
 
         const utf8_buf = switch (options.encoding.charSize()) {
@@ -340,9 +325,9 @@ pub const EncodedTextIterator = struct {
     /// Always returns UTF-8.
     /// When converting from UTF-16, the returned data is temporary
     /// and will be overwritten on subsequent calls to `next`.
-    fn nextToUtf8(self: Self, val_bytes: []const u8) error{ InvalidUTF16BOM, InvalidUTF16Data }![]const u8 {
+    fn nextToUtf8(self: Self, val_bytes: []u8) error{ InvalidUTF16BOM, InvalidUTF16Data }![]const u8 {
         if (self.encoding.charSize() == 2) {
-            const bytes_as_utf16 = @alignCast(u16_align, std.mem.bytesAsSlice(u16, val_bytes));
+            var bytes_as_utf16 = @alignCast(u16_align, std.mem.bytesAsSlice(u16, val_bytes));
             var val_no_bom = bytes_as_utf16;
             if (self.encoding == .utf16_with_bom) {
                 // If it's zero-length and missing the BOM then that's
@@ -351,6 +336,13 @@ pub const EncodedTextIterator = struct {
                 // says, but oh well.
                 if (bytes_as_utf16.len == 0) {
                     return val_bytes[0..0];
+                }
+                // if this is big endian, then swap everything to little endian
+                // TODO: I feel like this probably won't handle big endian native architectures correctly
+                if (bytes_as_utf16[0] == 0xFFFE) {
+                    for (bytes_as_utf16) |c, i| {
+                        bytes_as_utf16[i] = @byteSwap(u16, c);
+                    }
                 }
                 // check for byte order mark and skip it
                 if (bytes_as_utf16[0] != 0xFEFF) {

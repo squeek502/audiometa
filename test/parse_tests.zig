@@ -680,6 +680,33 @@ test "id3v2.4 text frame with multiple terminated values" {
     } });
 }
 
+test "id3v2.3 COMM as utf-16 with both BOM orderings" {
+    try parseExpectedMetadata("data/id3v2.3_utf16_mismatched_boms.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 3,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x170,
+                .map = &[_]MetadataEntry{
+                    .{ .name = "TSSE", .value = "LAME 32bits version 3.98.4 (http://www.mp3dev.org/)" },
+                    .{ .name = "TIT2", .value = "«‰ÂÒ¸ » —ÂÈ˜‡Ò / Here And Now" },
+                    .{ .name = "TPE1", .value = "Optimus Prime" },
+                    .{ .name = "TALB", .value = "Self-Titled" },
+                    .{ .name = "TCON", .value = "Emocore/Screamo" },
+                    .{ .name = "TRCK", .value = "1/7" },
+                    .{ .name = "TYER", .value = "2010" },
+                    .{ .name = "TLEN", .value = "246106" },
+                },
+            },
+            .comments = &.{.{
+                .language = "eng",
+                .description = "",
+                .value = "ExactAudioCopy v1.0b1",
+            }},
+        } },
+    } });
+}
+
 test "id3v2.4 incorrectly encoded (non-synchsafe) frame size edge cases" {
     // frame with non-synchsafe byte in the size
     try parseExpectedMetadata("data/id3v2.4_non_synchsafe_frame_size_bytes.mp3", .{ .tags = &.{
