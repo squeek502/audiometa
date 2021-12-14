@@ -680,6 +680,92 @@ test "id3v2.4 text frame with multiple terminated values" {
     } });
 }
 
+test "id3v2.4 incorrectly encoded (non-synchsafe) frame size edge cases" {
+    // frame with non-synchsafe byte in the size
+    try parseExpectedMetadata("data/id3v2.4_non_synchsafe_frame_size_bytes.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 4,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x3f8,
+                .map = &[_]MetadataEntry{},
+            },
+            .unsynchronized_lyrics = &.{.{
+                .language = "eng",
+                .description = "",
+                .value = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Quisque convallis ut nunc sit amet fringilla. Pellentesque tempor posuere dui, at commodo urna porttitor quis. Nunc tristique mollis lacus, ut ullamcorper odio finibus nec. Integer imperdiet orci a dolor maximus molestie. Maecenas quis faucibus odio. Donec molestie lectus magna, ac consequat ex posuere vitae. Praesent mauris diam, tempus et tempus in, dictum sit amet metus. Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia curae;\n\nUt non arcu pretium libero rutrum commodo. Mauris arcu ante, feugiat non vestibulum vitae, venenatis ac dui. Sed commodo magna vitae id.",
+            }},
+        } },
+    } });
+    // incorrectly encoded frame size that runs up against padding
+    try parseExpectedMetadata("data/id3v2.4_non_synchsafe_frame_size_padding.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 4,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x262,
+                .map = &[_]MetadataEntry{},
+            },
+            .unsynchronized_lyrics = &.{.{
+                .language = "eng",
+                .description = "",
+                .value = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Quisque convallis ut nunc sit amet fringilla. Pellentesque tempor posuere dui, at commodo urna porttitor quis. Nunc tristique mollis lacus, ut ullamcorper odio finibus nec. Integer imperdiet orci",
+            }},
+        } },
+    } });
+    // incorrectly encoded frame size that runs up against EOF exactly
+    try parseExpectedMetadata("data/id3v2.4_non_synchsafe_frame_size_eof.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 4,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x115,
+                .map = &[_]MetadataEntry{},
+            },
+            .unsynchronized_lyrics = &.{.{
+                .language = "eng",
+                .description = "",
+                .value = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Quisque convallis ut nunc sit amet fringilla. Pellentesque tempor posuere dui, at commodo urna porttitor quis. Nunc tristique mollis lacus, ut ullamcorper odio finibus nec. Integer imperdiet orci",
+            }},
+        } },
+    } });
+}
+
+test "id3v2.4 correctly encoded frame size edge cases" {
+    // correctly encoded frame that runs up against padding
+    try parseExpectedMetadata("data/id3v2.4_synchsafe_frame_size_padding.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 4,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x262,
+                .map = &[_]MetadataEntry{},
+            },
+            .unsynchronized_lyrics = &.{.{
+                .language = "eng",
+                .description = "",
+                .value = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Quisque convallis ut nunc sit amet fringilla. Pellentesque tempor posuere dui, at commodo urna porttitor quis. Nunc tristique mollis lacus, ut ullamcorper odio finibus nec. Integer imperdiet orci",
+            }},
+        } },
+    } });
+    // correctly encoded frame that runs up against EOF exactly
+    try parseExpectedMetadata("data/id3v2.4_synchsafe_frame_size_eof.mp3", .{ .tags = &.{
+        .{ .id3v2 = .{
+            .major_version = 4,
+            .metadata = .{
+                .start_offset = 0x0,
+                .end_offset = 0x115,
+                .map = &[_]MetadataEntry{},
+            },
+            .unsynchronized_lyrics = &.{.{
+                .language = "eng",
+                .description = "",
+                .value = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Quisque convallis ut nunc sit amet fringilla. Pellentesque tempor posuere dui, at commodo urna porttitor quis. Nunc tristique mollis lacus, ut ullamcorper odio finibus nec. Integer imperdiet orci",
+            }},
+        } },
+    } });
+}
+
 test "ogg" {
     try parseExpectedMetadata("data/vorbis.ogg", .{ .tags = &.{
         .{ .vorbis = .{
