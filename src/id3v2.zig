@@ -427,8 +427,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
     if (id3_major_version >= 4) {
         const cur_pos = try seekable_stream.getPos();
         frame_header.size = best_guess_size: {
-            const raw_size_bytes = std.mem.asBytes(&frame_header.raw_size);
-            const was_raw_size_synchsafe = synchsafe.isSliceSynchsafe(raw_size_bytes);
+            const was_raw_size_synchsafe = synchsafe.areIntBytesSynchsafe(u32, frame_header.raw_size);
 
             // If the raw integer's bytes weren't even synchsafe to begin with,
             // then we can assume that the raw integer is going to be more correct

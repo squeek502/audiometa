@@ -74,11 +74,46 @@ pub fn isSliceSynchsafe(bytes: []const u8) bool {
     for (bytes) |byte| {
         // if any byte has its most significant bit set,
         // then it's not synchsafe
-        if (byte & 0x80 != 0) {
+        if (byte & (1 << 7) != 0) {
             return false;
         }
     }
     return true;
+}
+
+/// Returns true if the given integer has no non-synchsafe
+/// bytes within it.
+pub fn areIntBytesSynchsafe(comptime T: type, x: T) bool {
+    comptime assert(@typeInfo(T) == .Int);
+    comptime assert(@typeInfo(T).Int.signedness == .unsigned);
+    const num_bits = @typeInfo(T).Int.bits;
+    if (num_bits < 8) return true;
+
+    const mask: T = comptime mask: {
+        const num_bytes = num_bits / 8;
+        var mask: T = 1 << 7;
+        var i: usize = 1;
+        inline while (i < num_bytes) : (i += 1) {
+            mask <<= 8;
+            mask |= 1 << 7;
+        }
+        break :mask mask;
+    };
+
+    return x & mask == 0;
+}
+
+/// Returns true if the integer is small enough that synchsafety
+/// is irrelevant. That is, the encoded and decoded forms of the
+/// integer are guaranteed to be equal.
+///
+/// Note: Any number for which this function returns false
+/// has the opposite guarantee--the encoded and decoded values
+/// will always differ.
+pub fn isBelowSynchsafeThreshold(comptime T: type, x: T) bool {
+    comptime assert(@typeInfo(T) == .Int);
+    comptime assert(@typeInfo(T).Int.signedness == .unsigned);
+    return std.math.maxInt(T) < 128 or x < 128;
 }
 
 fn testEncodeAndDecode(comptime T: type, encoded: T, decoded: DecodedType(T)) !void {
@@ -105,4 +140,14 @@ test "encoded and decoded types" {
 test "is synchsafe" {
     try std.testing.expect(isSliceSynchsafe(&[_]u8{ 0, 0, 0, 127 }));
     try std.testing.expect(!isSliceSynchsafe(&[_]u8{ 0, 0, 0, 255 }));
+
+    try std.testing.expect(areIntBytesSynchsafe(u2, 0));
+    try std.testing.expect(areIntBytesSynchsafe(u8, 127));
+    try std.testing.expect(!areIntBytesSynchsafe(u8, 128));
+    try std.testing.expect(!areIntBytesSynchsafe(u8, 255));
+    try std.testing.expect(areIntBytesSynchsafe(u9, 256));
+
+    try std.testing.expect(isBelowSynchsafeThreshold(u2, 0));
+    try std.testing.expect(isBelowSynchsafeThreshold(u8, 127));
+    try std.testing.expect(!isBelowSynchsafeThreshold(u8, 128));
 }
