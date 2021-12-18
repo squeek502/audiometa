@@ -22,7 +22,7 @@ pub fn main() !void {
         num_index += 1;
     }
 
-    const number = try std.fmt.parseInt(u32, args[1], 0);
+    const number = try std.fmt.parseInt(u32, args[num_index], 0);
     const result = result: {
         if (encode) {
             break :result synchsafe.encode(u32, number);
