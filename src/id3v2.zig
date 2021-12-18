@@ -195,7 +195,7 @@ pub const EncodedTextIterator = struct {
     /// Buffer for UTF-8 data when converting from UTF-16
     /// TODO: Is this actually useful performance-wise?
     utf8_buf: []u8,
-    allocator: *Allocator,
+    allocator: Allocator,
 
     const Self = @This();
 
@@ -207,7 +207,7 @@ pub const EncodedTextIterator = struct {
         frame_is_unsynch: bool,
     };
 
-    pub fn init(allocator: *Allocator, reader: anytype, options: Options) !Self {
+    pub fn init(allocator: Allocator, reader: anytype, options: Options) !Self {
         // always align to u16 just so that UTF-16 data is easy to work with
         // but alignCast it back to u8 so that it's also easy to work with non-UTF-16 data
         var raw_text_data = @alignCast(1, try allocator.allocWithOptions(u8, options.text_data_size, u16_align, null));
@@ -398,7 +398,7 @@ pub fn readTextFrameCommon(unsynch_capable_reader: anytype, frame_header: *Frame
 
 /// On error, seekable_stream cursor position will be wherever the error happened, it is
 /// up to the caller to determine what to do from there
-pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekable_stream: anytype, metadata_id3v2_container: *ID3v2Metadata, frame_header: *FrameHeader, remaining_tag_size: usize, full_unsynch: bool) !void {
+pub fn readFrame(allocator: Allocator, unsynch_capable_reader: anytype, seekable_stream: anytype, metadata_id3v2_container: *ID3v2Metadata, frame_header: *FrameHeader, remaining_tag_size: usize, full_unsynch: bool) !void {
     _ = allocator;
 
     const id3_major_version = metadata_id3v2_container.header.major_version;
@@ -597,7 +597,7 @@ pub fn readFrame(allocator: *Allocator, unsynch_capable_reader: anytype, seekabl
     }
 }
 
-pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !ID3v2Metadata {
+pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !ID3v2Metadata {
     const start_offset = try seekable_stream.getPos();
     const id3_header = try ID3Header.read(reader);
 
@@ -722,7 +722,7 @@ pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !I
 }
 
 /// Expects the seekable_stream position to be at the end of the footer that is being read.
-pub fn readFromFooter(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !ID3v2Metadata {
+pub fn readFromFooter(allocator: Allocator, reader: anytype, seekable_stream: anytype) !ID3v2Metadata {
     var end_pos = try seekable_stream.getPos();
     if (end_pos < ID3Header.len) {
         return error.EndOfStream;
@@ -746,7 +746,7 @@ pub fn readFromFooter(allocator: *Allocator, reader: anytype, seekable_stream: a
 
 /// Untested, probably no real reason to keep around
 /// TODO: probably remove
-pub fn readAll(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !AllID3v2Metadata {
+pub fn readAll(allocator: Allocator, reader: anytype, seekable_stream: anytype) !AllID3v2Metadata {
     var metadata_buf = std.ArrayList(ID3v2Metadata).init(allocator);
     errdefer {
         for (metadata_buf.items) |*meta| {

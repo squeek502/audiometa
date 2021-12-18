@@ -6,7 +6,7 @@ const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
 /// Like MetadataMap, but uses description/language as the keys
 /// so it works for ID3v2 comments/unsynchronized lyrics
 pub const FullTextMap = struct {
-    allocator: *Allocator,
+    allocator: Allocator,
     entries: EntryList,
     language_to_indexes: LanguageToIndexesMap,
     description_to_indexes: DescriptionToIndexesMap,
@@ -21,7 +21,7 @@ pub const FullTextMap = struct {
     const LanguageToIndexesMap = std.StringHashMapUnmanaged(IndexList);
     const DescriptionToIndexesMap = std.StringHashMapUnmanaged(IndexList);
 
-    pub fn init(allocator: *Allocator) FullTextMap {
+    pub fn init(allocator: Allocator) FullTextMap {
         return .{
             .allocator = allocator,
             .entries = .{},

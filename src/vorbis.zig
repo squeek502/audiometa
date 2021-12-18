@@ -23,7 +23,7 @@ const first_page_of_logical_bitstream = 0x02;
 
 /// Note: It is up to the caller to set metadata start/end offsets, those are not
 /// set within this function
-pub fn readComment(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !Metadata {
+pub fn readComment(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Metadata {
     var metadata: Metadata = Metadata.init(allocator);
     errdefer metadata.deinit();
 
@@ -60,7 +60,7 @@ pub fn readComment(allocator: *Allocator, reader: anytype, seekable_stream: anyt
 
 /// Expects the stream to be at the start of the Ogg bitstream (i.e. 
 /// any ID3v2 tags must be skipped before calling this function)
-pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !Metadata {
+pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Metadata {
     _ = seekable_stream;
 
     const ogg_page_reader = ogg.oggPageReader(reader).reader();

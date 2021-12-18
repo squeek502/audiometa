@@ -12,7 +12,7 @@ pub const id3v1_identifier = "TAG";
 pub const tag_size = 128;
 
 /// Assumes the stream cursor is at the end of the ID3v1 tag
-pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !Metadata {
+pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Metadata {
     var metadata: Metadata = Metadata.init(allocator);
     errdefer metadata.deinit();
 

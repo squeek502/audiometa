@@ -5,7 +5,6 @@ const MetadataEntry = audiometa.metadata.MetadataMap.Entry;
 const FullTextEntry = audiometa.id3v2_data.FullTextMap.Entry;
 const testing = std.testing;
 const fmtUtf8SliceEscapeUpper = audiometa.util.fmtUtf8SliceEscapeUpper;
-const Allocator = std.mem.Allocator;
 
 pub const log_level: std.log.Level = .debug;
 

@@ -11,7 +11,7 @@ pub const block_type_vorbis_comment = 4;
 
 /// Expects the stream to be at the start of the FLAC stream marker (i.e. 
 /// any ID3v2 tags must be skipped before calling this function)
-pub fn read(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !Metadata {
+pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Metadata {
     var stream_marker = try reader.readBytesNoEof(4);
     if (!std.mem.eql(u8, stream_marker[0..], flac_stream_marker)) {
         return error.InvalidStreamMarker;

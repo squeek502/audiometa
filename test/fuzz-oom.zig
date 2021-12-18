@@ -12,7 +12,7 @@ pub export fn main() void {
 pub fn zigMain() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == false);
-    const gpa_allocator = &gpa.allocator;
+    const gpa_allocator = gpa.allocator();
 
     const stdin = std.io.getStdIn();
     const data = try stdin.readToEndAlloc(gpa_allocator, std.math.maxInt(usize));
@@ -32,15 +32,15 @@ pub fn zigMain() !void {
         // when debugging, it helps a lot to get the context of where the failing alloc
         // actually occured, so further wrap the failing allocator to get a stack
         // trace at the point of the OutOfMemory return.
-        var allocator: *Allocator = allocator: {
+        var allocator: Allocator = allocator: {
             // However, this will fail in the AFL-compiled version because it
             // panics when trying to print a stack trace, so only do this when
             // we are compiling the debug version of this code with the Zig compiler
             if (build_options.is_zig_debug_version) {
-                var stack_trace_allocator = StackTraceOnErrorAllocator.init(&failing_allocator.allocator);
-                break :allocator &stack_trace_allocator.allocator;
+                var stack_trace_allocator = StackTraceOnErrorAllocator.init(failing_allocator.allocator());
+                break :allocator stack_trace_allocator.allocator();
             } else {
-                break :allocator &failing_allocator.allocator;
+                break :allocator failing_allocator.allocator();
             }
         };
 
@@ -68,24 +68,22 @@ pub fn zigMain() !void {
 
 /// Wrapping allocator that prints a stack trace on error in alloc
 const StackTraceOnErrorAllocator = struct {
-    allocator: Allocator,
-    parent_allocator: *Allocator,
+    parent_allocator: Allocator,
 
     const Self = @This();
 
-    pub fn init(parent_allocator: *Allocator) Self {
+    pub fn init(parent_allocator: Allocator) Self {
         return .{
-            .allocator = Allocator{
-                .allocFn = alloc,
-                .resizeFn = resize,
-            },
             .parent_allocator = parent_allocator,
         };
     }
 
-    fn alloc(allocator: *Allocator, len: usize, ptr_align: u29, len_align: u29, ra: usize) error{OutOfMemory}![]u8 {
-        const self = @fieldParentPtr(Self, "allocator", allocator);
-        return self.parent_allocator.allocFn(self.parent_allocator, len, ptr_align, len_align, ra) catch |err| {
+    pub fn allocator(self: *Self) Allocator {
+        return Allocator.init(self, alloc, resize, free);
+    }
+
+    fn alloc(self: *Self, len: usize, ptr_align: u29, len_align: u29, ra: usize) error{OutOfMemory}![]u8 {
+        return self.parent_allocator.rawAlloc(len, ptr_align, len_align, ra) catch |err| {
             std.debug.print(
                 "alloc: {s} - len: {}, ptr_align: {}, len_align: {}\n",
                 .{ @errorName(err), len, ptr_align, len_align },
@@ -97,12 +95,15 @@ const StackTraceOnErrorAllocator = struct {
         };
     }
 
-    fn resize(allocator: *Allocator, buf: []u8, buf_align: u29, new_len: usize, len_align: u29, ra: usize) error{OutOfMemory}!usize {
-        const self = @fieldParentPtr(Self, "allocator", allocator);
+    fn resize(self: *Self, buf: []u8, buf_align: u29, new_len: usize, len_align: u29, ra: usize) ?usize {
         // Do not catch errors here since this can return errors that are not 'real'
         // See the doc comment of Allocotor.reallocBytes for more details.
         // Also, the FailingAllocator does not induce failure in its resize implementation,
         // which is what we're really interested in here.
-        return self.parent_allocator.resizeFn(self.parent_allocator, buf, buf_align, new_len, len_align, ra);
+        return self.parent_allocator.rawResize(buf, buf_align, new_len, len_align, ra);
+    }
+
+    fn free(self: *Self, buf: []u8, buf_align: u29, ret_addr: usize) void {
+        return self.parent_allocator.rawFree(buf, buf_align, ret_addr);
     }
 };

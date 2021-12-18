@@ -236,7 +236,7 @@ test "music folder" {
     }
 }
 
-fn convertID3v2Alloc(allocator: *Allocator, map: *MetadataMap, id3_major_version: u8) !MetadataMap {
+fn convertID3v2Alloc(allocator: Allocator, map: *MetadataMap, id3_major_version: u8) !MetadataMap {
     var converted = MetadataMap.init(allocator);
     errdefer converted.deinit();
 
@@ -386,7 +386,7 @@ fn compareTDRC(expected: *MetadataMap, actual: *MetadataMap) !void {
     }
 }
 
-fn compareMetadataMapID3v2(allocator: *Allocator, expected: *MetadataMap, actual: *MetadataMap, id3_major_version: u8) !void {
+fn compareMetadataMapID3v2(allocator: Allocator, expected: *MetadataMap, actual: *MetadataMap, id3_major_version: u8) !void {
     var actual_converted = try convertID3v2Alloc(allocator, actual, id3_major_version);
     defer actual_converted.deinit();
 
@@ -494,7 +494,7 @@ fn compareFullText(expected: FullTextEntry, actual: FullTextEntry) !void {
     try testing.expectEqualStrings(expected.value, actual.value);
 }
 
-fn compareMetadata(allocator: *Allocator, all_expected: *AllMetadata, all_actual: *AllMetadata) !void {
+fn compareMetadata(allocator: Allocator, all_expected: *AllMetadata, all_actual: *AllMetadata) !void {
     // dumb way to do this but oh well
     errdefer {
         std.debug.print("\nexpected:\n", .{});
@@ -544,7 +544,7 @@ fn compareMetadata(allocator: *Allocator, all_expected: *AllMetadata, all_actual
     }
 }
 
-fn getTagLibMetadata(allocator: *std.mem.Allocator, cwd: ?std.fs.Dir, filepath: []const u8) !AllMetadata {
+fn getTagLibMetadata(allocator: Allocator, cwd: ?std.fs.Dir, filepath: []const u8) !AllMetadata {
     const result = try std.ChildProcess.exec(.{
         .allocator = allocator,
         .argv = &[_][]const u8{

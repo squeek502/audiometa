@@ -73,7 +73,7 @@ pub const APETagFlags = struct {
     }
 };
 
-pub fn readFromHeader(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !APEMetadata {
+pub fn readFromHeader(allocator: Allocator, reader: anytype, seekable_stream: anytype) !APEMetadata {
     const start_offset = try seekable_stream.getPos();
     const header = try APEHeader.read(reader);
     const end_offset = start_offset + APEHeader.len + header.tag_size;
@@ -98,7 +98,7 @@ pub fn readFromHeader(allocator: *Allocator, reader: anytype, seekable_stream: a
 }
 
 /// Expects the seekable_stream position to be at the end of the footer that is being read.
-pub fn readFromFooter(allocator: *Allocator, reader: anytype, seekable_stream: anytype) !APEMetadata {
+pub fn readFromFooter(allocator: Allocator, reader: anytype, seekable_stream: anytype) !APEMetadata {
     var end_pos = try seekable_stream.getPos();
     if (end_pos < APEHeader.len) {
         return error.EndOfStream;
@@ -136,7 +136,7 @@ pub fn readFromFooter(allocator: *Allocator, reader: anytype, seekable_stream: a
     return ape_metadata;
 }
 
-pub fn readItems(allocator: *Allocator, reader: anytype, seekable_stream: anytype, ape_metadata: *APEMetadata, end_of_items_offset: usize) !void {
+pub fn readItems(allocator: Allocator, reader: anytype, seekable_stream: anytype, ape_metadata: *APEMetadata, end_of_items_offset: usize) !void {
     var metadata_map = &ape_metadata.metadata.map;
 
     if (end_of_items_offset < 9) {

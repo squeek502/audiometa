@@ -13,7 +13,7 @@ const Timer = time.Timer;
 
 var timer: Timer = undefined;
 
-pub fn readAll(allocator: *Allocator, stream_source: *std.io.StreamSource) !AllMetadata {
+pub fn readAll(allocator: Allocator, stream_source: *std.io.StreamSource) !AllMetadata {
     timer = try Timer.start();
 
     // Note: Using a buffered stream source here doesn't actually seem to make much
@@ -211,7 +211,7 @@ pub const TypedMetadata = union(MetadataType) {
 };
 
 pub const AllMetadata = struct {
-    allocator: *Allocator,
+    allocator: Allocator,
     tags: []TypedMetadata,
 
     pub fn deinit(self: *AllMetadata) void {
@@ -263,7 +263,7 @@ pub const AllMetadata = struct {
 
     /// Returns an allocated slice of pointers to all metadata of the given type.
     /// Caller is responsible for freeing the slice's memory.
-    pub fn getAllMetadataOfType(self: AllMetadata, allocator: *Allocator, comptime tag_type: MetadataType) ![]*std.meta.TagPayload(TypedMetadata, tag_type) {
+    pub fn getAllMetadataOfType(self: AllMetadata, allocator: Allocator, comptime tag_type: MetadataType) ![]*std.meta.TagPayload(TypedMetadata, tag_type) {
         const T = std.meta.TagPayload(TypedMetadata, tag_type);
         var buf = std.ArrayList(*T).init(allocator);
         errdefer buf.deinit();
@@ -299,7 +299,7 @@ pub const AllMetadata = struct {
 };
 
 pub const AllID3v2Metadata = struct {
-    allocator: *Allocator,
+    allocator: Allocator,
     tags: []ID3v2Metadata,
 
     pub fn deinit(self: *AllID3v2Metadata) void {
@@ -316,7 +316,7 @@ pub const ID3v2Metadata = struct {
     comments: id3v2_data.FullTextMap,
     unsynchronized_lyrics: id3v2_data.FullTextMap,
 
-    pub fn init(allocator: *Allocator, header: id3v2.ID3Header, start_offset: usize, end_offset: usize) ID3v2Metadata {
+    pub fn init(allocator: Allocator, header: id3v2.ID3Header, start_offset: usize, end_offset: usize) ID3v2Metadata {
         return .{
             .metadata = Metadata.initWithOffsets(allocator, start_offset, end_offset),
             .header = header,
@@ -345,7 +345,7 @@ pub const ID3v2Metadata = struct {
 };
 
 pub const AllAPEMetadata = struct {
-    allocator: *Allocator,
+    allocator: Allocator,
     tags: []APEMetadata,
 
     pub fn deinit(self: *AllAPEMetadata) void {
@@ -360,7 +360,7 @@ pub const APEMetadata = struct {
     metadata: Metadata,
     header_or_footer: ape.APEHeader,
 
-    pub fn init(allocator: *Allocator, header_or_footer: ape.APEHeader, start_offset: usize, end_offset: usize) APEMetadata {
+    pub fn init(allocator: Allocator, header_or_footer: ape.APEHeader, start_offset: usize, end_offset: usize) APEMetadata {
         return .{
             .metadata = Metadata.initWithOffsets(allocator, start_offset, end_offset),
             .header_or_footer = header_or_footer,
@@ -377,11 +377,11 @@ pub const Metadata = struct {
     start_offset: usize,
     end_offset: usize,
 
-    pub fn init(allocator: *Allocator) Metadata {
+    pub fn init(allocator: Allocator) Metadata {
         return Metadata.initWithOffsets(allocator, undefined, undefined);
     }
 
-    pub fn initWithOffsets(allocator: *Allocator, start_offset: usize, end_offset: usize) Metadata {
+    pub fn initWithOffsets(allocator: Allocator, start_offset: usize, end_offset: usize) Metadata {
         return .{
             .map = MetadataMap.init(allocator),
             .start_offset = start_offset,
@@ -396,7 +396,7 @@ pub const Metadata = struct {
 
 /// HashMap-like but can handle multiple values with the same key.
 pub const MetadataMap = struct {
-    allocator: *Allocator,
+    allocator: Allocator,
     entries: EntryList,
     name_to_indexes: NameToIndexesMap,
 
@@ -408,7 +408,7 @@ pub const MetadataMap = struct {
     const IndexList = std.ArrayListUnmanaged(usize);
     const NameToIndexesMap = std.StringHashMapUnmanaged(IndexList);
 
-    pub fn init(allocator: *Allocator) MetadataMap {
+    pub fn init(allocator: Allocator) MetadataMap {
         return .{
             .allocator = allocator,
             .entries = .{},
@@ -532,7 +532,7 @@ pub const MetadataMap = struct {
         return entry_index_list.items.len;
     }
 
-    pub fn getAllAlloc(self: *MetadataMap, allocator: *Allocator, name: []const u8) !?[][]const u8 {
+    pub fn getAllAlloc(self: *MetadataMap, allocator: Allocator, name: []const u8) !?[][]const u8 {
         const entry_index_list = (self.name_to_indexes.getPtr(name)) orelse return null;
         if (entry_index_list.items.len == 0) return null;
 
@@ -551,7 +551,7 @@ pub const MetadataMap = struct {
         return self.entries.items[entry_index].value;
     }
 
-    pub fn getJoinedAlloc(self: *MetadataMap, allocator: *Allocator, name: []const u8, separator: []const u8) !?[]u8 {
+    pub fn getJoinedAlloc(self: *MetadataMap, allocator: Allocator, name: []const u8, separator: []const u8) !?[]u8 {
         const entry_index_list = (self.name_to_indexes.getPtr(name)) orelse return null;
         if (entry_index_list.items.len == 0) return null;
         if (entry_index_list.items.len == 1) {

@@ -110,7 +110,7 @@ const ignored_fields = std.ComptimeStringMap(void, .{
     .{"oso"}, // this came from a COMM frame
 });
 
-pub fn coalesceMetadata(allocator: *Allocator, metadata: *AllMetadata) !MetadataMap {
+pub fn coalesceMetadata(allocator: Allocator, metadata: *AllMetadata) !MetadataMap {
     var coalesced = meta.MetadataMap.init(allocator);
     errdefer coalesced.deinit();
 
@@ -278,7 +278,7 @@ fn convertIdToName(id: []const u8) ?[]const u8 {
     return id3v2_34_name_lookup.get(id) orelse id3v2_2_name_lookup.get(std.mem.sliceTo(id, '\x00')) orelse id3v2_4_name_lookup.get(id);
 }
 
-fn compareMetadata(allocator: *Allocator, expected: *MetadataArray, actual: *MetadataMap) !void {
+fn compareMetadata(allocator: Allocator, expected: *MetadataArray, actual: *MetadataMap) !void {
     for (expected.array.items) |field| {
         if (ignored_fields.get(field.name) != null) continue;
         if (std.mem.startsWith(u8, field.name, "id3v2_priv.")) continue;
@@ -331,7 +331,7 @@ fn compareMetadata(allocator: *Allocator, expected: *MetadataArray, actual: *Met
 }
 
 const MetadataArray = struct {
-    allocator: *std.mem.Allocator,
+    allocator: Allocator,
     array: std.ArrayList(Field),
 
     const Field = struct {
@@ -339,7 +339,7 @@ const MetadataArray = struct {
         value: []const u8,
     };
 
-    pub fn init(allocator: *std.mem.Allocator) MetadataArray {
+    pub fn init(allocator: Allocator) MetadataArray {
         return .{
             .allocator = allocator,
             .array = std.ArrayList(Field).init(allocator),
@@ -359,7 +359,7 @@ const MetadataArray = struct {
     }
 };
 
-fn getFFProbeMetadata(allocator: *std.mem.Allocator, cwd: ?std.fs.Dir, filepath: []const u8) !MetadataArray {
+fn getFFProbeMetadata(allocator: Allocator, cwd: ?std.fs.Dir, filepath: []const u8) !MetadataArray {
     var metadata = MetadataArray.init(allocator);
     errdefer metadata.deinit();
 

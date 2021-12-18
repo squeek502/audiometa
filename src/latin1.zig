@@ -3,7 +3,7 @@ const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 
 /// Caller must free returned memory.
-pub fn latin1ToUtf8Alloc(allocator: *Allocator, latin1_text: []const u8) ![]u8 {
+pub fn latin1ToUtf8Alloc(allocator: Allocator, latin1_text: []const u8) ![]u8 {
     var buffer = try std.ArrayList(u8).initCapacity(allocator, latin1_text.len);
     errdefer buffer.deinit();
     for (latin1_text) |c| switch (c) {
