@@ -496,6 +496,11 @@ pub fn readFrame(allocator: Allocator, unsynch_capable_reader: anytype, seekable
             return metadata_map.put(id, "");
         }
 
+        const max_size_remaining = (try seekable_stream.getEndPos()) - (try seekable_stream.getPos());
+        if (text_frame.size_remaining > max_size_remaining) {
+            return error.EndOfStream;
+        }
+
         if (is_user_defined) {
             var text_iterator = try EncodedTextIterator.init(allocator, unsynch_capable_reader, .{
                 .text_data_size = text_frame.size_remaining,
@@ -560,6 +565,11 @@ pub fn readFrame(allocator: Allocator, unsynch_capable_reader: anytype, seekable
         const language = try unsynch_capable_reader.readBytesNoEof(3);
         text_frame.size_remaining -= 3;
 
+        const max_size_remaining = (try seekable_stream.getEndPos()) - (try seekable_stream.getPos());
+        if (text_frame.size_remaining > max_size_remaining) {
+            return error.EndOfStream;
+        }
+
         var text_iterator = try EncodedTextIterator.init(allocator, unsynch_capable_reader, .{
             .text_data_size = text_frame.size_remaining,
             .encoding = text_frame.encoding,
@@ -579,6 +589,11 @@ pub fn readFrame(allocator: Allocator, unsynch_capable_reader: anytype, seekable
         }
         const language = try unsynch_capable_reader.readBytesNoEof(3);
         text_frame.size_remaining -= 3;
+
+        const max_size_remaining = (try seekable_stream.getEndPos()) - (try seekable_stream.getPos());
+        if (text_frame.size_remaining > max_size_remaining) {
+            return error.EndOfStream;
+        }
 
         var text_iterator = try EncodedTextIterator.init(allocator, unsynch_capable_reader, .{
             .text_data_size = text_frame.size_remaining,
