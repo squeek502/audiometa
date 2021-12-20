@@ -35,6 +35,20 @@ pub fn latin1ToUtf8(latin1_text: []const u8, buf: []u8) []u8 {
     return buf[0..i];
 }
 
+/// Returns true if all codepoints in the UTF-8 string
+/// are within the range of Latin-1 characters
+pub fn isUtf8AllLatin1(utf8_text: []const u8) bool {
+    var utf8_it = std.unicode.Utf8Iterator{
+        .bytes = utf8_text,
+        .i = 0,
+    };
+    while (utf8_it.nextCodepoint()) |codepoint| switch (codepoint) {
+        0x00...0xFF => {},
+        else => return false,
+    };
+    return true;
+}
+
 test "latin1 to utf8" {
     var buf: [512]u8 = undefined;
     const utf8 = latin1ToUtf8("a\xE0b\xE6c\xEFd", &buf);
@@ -47,4 +61,13 @@ test "latin1 to utf8 alloc" {
     defer std.testing.allocator.free(utf8);
 
     try std.testing.expectEqualSlices(u8, "aàbæcïd", utf8);
+}
+
+test "is utf8 all latin1" {
+    var buf: [512]u8 = undefined;
+    const utf8 = latin1ToUtf8("abc\x01\x7F\x80\xFF", &buf);
+
+    try std.testing.expect(isUtf8AllLatin1(utf8));
+    try std.testing.expect(isUtf8AllLatin1("aàbæcïd"));
+    try std.testing.expect(!isUtf8AllLatin1("Д"));
 }

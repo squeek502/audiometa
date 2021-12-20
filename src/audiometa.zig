@@ -6,6 +6,7 @@ pub const id3v2 = @import("id3v2.zig");
 pub const id3v2_data = @import("id3v2_data.zig");
 pub const ape = @import("ape.zig");
 pub const latin1 = @import("latin1.zig");
+pub const windows1251 = @import("windows1251.zig");
 pub const metadata = @import("metadata.zig");
 pub const synchsafe = @import("synchsafe.zig");
 pub const unsynch = @import("unsynch.zig");
