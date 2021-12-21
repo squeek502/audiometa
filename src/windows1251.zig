@@ -43,6 +43,60 @@ pub fn windows1251ToUtf8(windows1251_text: []const u8, buf: []u8) ![]u8 {
     return buf[0..i];
 }
 
+pub const Windows1251DetectionThreshold = struct {
+    /// Number of Cyrillic characters in a row before
+    /// the text is assumed to be Windows1251.
+    streak: usize,
+    /// If there are zero non-Cyrillic characters, then
+    /// there must be at least this many Cyrillic characters
+    /// for the text to be assumed Windows1251.
+    min_cyrillic_letters: usize,
+};
+
+pub fn reachesDetectionThreshold(text: []const u8, comptime threshold: Windows1251DetectionThreshold) bool {
+    var cyrillic_streak: usize = 0;
+    var cyrillic_letters: usize = 0;
+    var found_streak: bool = false;
+    var ascii_letters: usize = 0;
+    for (text) |c| {
+        switch (c) {
+            // The invalid character being present disqualifies
+            // the text entirely
+            invalid_character => return false,
+            'a'...'z', 'A'...'Z' => {
+                cyrillic_streak = 0;
+                ascii_letters += 1;
+            },
+            // zig fmt: off
+            // these are the cyrillic characters only
+            0x80, 0x81, 0x83, 0x8A, 0x8C...0x90, 0x9A,
+            0x9C...0x9F, 0xA1...0xA3, 0xA5, 0xA8, 0xAA,
+            0xAF, 0xB2...0xB4, 0xB8, 0xBA, 0xBC...0xFF,
+            // zig fmt: on
+            => {
+                cyrillic_streak += 1;
+                cyrillic_letters += 1;
+                if (cyrillic_streak >= threshold.streak) {
+                    // We can't return early here
+                    // since we still need to validate that
+                    // the invalid character isn't present
+                    // anywhere in the text
+                    found_streak = true;
+                }
+            },
+            // control characters, punctuation, numbers, symbols, etc
+            // are irrelevant
+            else => {},
+        }
+    }
+    const all_cyrillic = ascii_letters == 0 and cyrillic_letters >= threshold.min_cyrillic_letters;
+    return found_streak or all_cyrillic;
+}
+
+pub fn couldBeWindows1251(text: []const u8) bool {
+    return reachesDetectionThreshold(text, .{ .streak = 4, .min_cyrillic_letters = 2 });
+}
+
 test "windows1251 to utf8" {
     var buf: [512]u8 = undefined;
     const utf8 = try windows1251ToUtf8("a\xE0b\xE6c\xEFd", &buf);
@@ -55,6 +109,16 @@ test "windows1251 to utf8 alloc" {
     defer std.testing.allocator.free(utf8);
 
     try std.testing.expectEqualSlices(u8, "aаbжcпd", utf8);
+}
+
+test "could be windows1251" {
+    try std.testing.expect(!couldBeWindows1251("abcd"));
+    try std.testing.expect(!couldBeWindows1251(""));
+    try std.testing.expect(!couldBeWindows1251("abc\xC8\xC8"));
+    try std.testing.expect(!couldBeWindows1251("\xC8\xC8\xC8\xC8\x98"));
+    try std.testing.expect(!couldBeWindows1251("a\xE0b\xE6c\xEFd"));
+    try std.testing.expect(couldBeWindows1251("\xC8\xC8"));
+    try std.testing.expect(couldBeWindows1251("abc\xC8\xC8\xE6\xEF"));
 }
 
 // TODO: Is an array lookup better here?
