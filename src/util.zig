@@ -66,3 +66,32 @@ pub fn fmtUtf8SliceEscapeLower(bytes: []const u8) std.fmt.Formatter(formatUtf8Sl
 pub fn fmtUtf8SliceEscapeUpper(bytes: []const u8) std.fmt.Formatter(formatUtf8SliceEscapeUpper) {
     return .{ .data = bytes };
 }
+
+/// Reader that panics if the size to read is greater than the given max size
+pub fn MaxSizeReader(comptime ReaderType: type) type {
+    return struct {
+        child_reader: ReaderType,
+        max_size: usize,
+
+        pub const Error = ReaderType.Error;
+        pub const Reader = std.io.Reader(*Self, Error, read);
+
+        const Self = @This();
+
+        pub fn read(self: *Self, dest: []u8) Error!usize {
+            if (dest.len > self.max_size) {
+                std.debug.print("tried to read size {} which is greater than max size {}\n", .{ dest.len, self.max_size });
+                @panic("Read size greater than max size");
+            }
+            return self.child_reader.read(dest);
+        }
+
+        pub fn reader(self: *Self) Reader {
+            return .{ .context = self };
+        }
+    };
+}
+
+pub fn maxSizeReader(max_size: usize, underlying_stream: anytype) MaxSizeReader(@TypeOf(underlying_stream)) {
+    return .{ .child_reader = underlying_stream, .max_size = max_size };
+}
