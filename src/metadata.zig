@@ -300,8 +300,9 @@ pub const AllMetadata = struct {
     }
 
     pub fn getLastMetadataOfType(self: AllMetadata, comptime tag_type: MetadataType) ?*std.meta.TagPayload(TypedMetadata, tag_type) {
-        var i = self.tags.len - 1;
-        while (i > 0) : (i -= 1) {
+        var i = self.tags.len;
+        while (i != 0) {
+            i -= 1;
             if (@as(MetadataType, self.tags[i]) == tag_type) {
                 return &@field(self.tags[i], @tagName(tag_type));
             }
