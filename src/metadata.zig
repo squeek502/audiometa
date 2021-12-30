@@ -5,7 +5,6 @@ const id3v1 = @import("id3v1.zig");
 const flac = @import("flac.zig");
 const vorbis = @import("vorbis.zig");
 const ape = @import("ape.zig");
-const util = @import("util.zig");
 const Allocator = std.mem.Allocator;
 const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
 const BufferedStreamSource = @import("buffered_stream_source.zig").BufferedStreamSource;
@@ -30,18 +29,7 @@ pub fn readAll(allocator: Allocator, stream_source: *std.io.StreamSource) !AllMe
     // anyway so it's just doing extra work for no reason.
     const buffer_size = 512;
     var buffered_stream_source = BufferedStreamSource(buffer_size).init(stream_source);
-    var reader = reader: {
-        // When runtime safety is enabled, we wrap the reader in a reader
-        // that panics if we ever try to read something larger than the file size,
-        // since that will always be a bug.
-        if (std.debug.runtime_safety) {
-            const stream_size = try buffered_stream_source.getEndPos();
-            var max_size_reader = util.maxSizeReader(stream_size, buffered_stream_source.reader());
-            break :reader max_size_reader.reader();
-        } else {
-            break :reader buffered_stream_source.reader();
-        }
-    };
+    var reader = buffered_stream_source.reader();
     var seekable_stream = buffered_stream_source.seekableStream();
 
     var all_metadata = std.ArrayList(TypedMetadata).init(allocator);
