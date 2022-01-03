@@ -7,12 +7,14 @@ const testing = std.testing;
 const fmtUtf8SliceEscapeUpper = audiometa.util.fmtUtf8SliceEscapeUpper;
 
 pub const log_level: std.log.Level = .debug;
+const induce_allocation_failures = true;
 
-fn parseExpectedMetadata(comptime path: []const u8, expected_meta: ExpectedAllMetadata) !void {
-    std.log.debug("{s}\n", .{path});
-    const data = @embedFile(path);
-    var stream_source = std.io.StreamSource{ .const_buffer = std.io.fixedBufferStream(data) };
-    var meta = try audiometa.metadata.readAll(testing.allocator, &stream_source);
+fn parseExpectedMetadataImpl(allocator: std.mem.Allocator, stream_source: *std.io.StreamSource, expected_meta: ExpectedAllMetadata) !void {
+    // need to reset the position of the stream so that this function can be called
+    // multiple times (which happens when inducing allocation failures)
+    try stream_source.seekTo(0);
+
+    var meta = try audiometa.metadata.readAll(allocator, stream_source);
     defer meta.deinit();
 
     compareAllMetadata(&expected_meta, &meta) catch |err| {
@@ -22,6 +24,17 @@ fn parseExpectedMetadata(comptime path: []const u8, expected_meta: ExpectedAllMe
         meta.dump();
         return err;
     };
+}
+
+fn parseExpectedMetadata(comptime path: []const u8, expected_meta: ExpectedAllMetadata) !void {
+    std.log.debug("{s}\n", .{path});
+    const data = @embedFile(path);
+    var stream_source = std.io.StreamSource{ .const_buffer = std.io.fixedBufferStream(data) };
+    if (induce_allocation_failures) {
+        return audiometa.util.checkAllAllocationFailures(testing.allocator, parseExpectedMetadataImpl, .{ &stream_source, expected_meta });
+    } else {
+        return parseExpectedMetadataImpl(testing.allocator, &stream_source, expected_meta);
+    }
 }
 
 fn compareAllMetadata(all_expected: *const ExpectedAllMetadata, all_actual: *const AllMetadata) !void {

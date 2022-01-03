@@ -1,4 +1,5 @@
 const std = @import("std");
+const print = std.debug.print;
 
 pub const Case = enum { lower, upper };
 
@@ -65,4 +66,68 @@ pub fn fmtUtf8SliceEscapeLower(bytes: []const u8) std.fmt.Formatter(formatUtf8Sl
 /// hexadecimal notation.
 pub fn fmtUtf8SliceEscapeUpper(bytes: []const u8) std.fmt.Formatter(formatUtf8SliceEscapeUpper) {
     return .{ .data = bytes };
+}
+
+/// Run the function once and get the total number of allocations,
+/// then iterate and run the function while incrementing the failing
+/// index each iteration.
+///
+/// This is a somewhat hacky generic version of the logic in
+/// Zig's std/zig/parser_test.zig `testTransform` function.
+pub fn checkAllAllocationFailures(backing_allocator: std.mem.Allocator, comptime f: anytype, extra_args: anytype) !void {
+    switch (@typeInfo(@typeInfo(@TypeOf(f)).Fn.return_type.?)) {
+        .ErrorUnion => |info| {
+            if (info.payload != void) {
+                @compileError("Return type must be !void");
+            }
+        },
+        else => @compileError("Return type must be !void"),
+    }
+    const ArgsTuple = std.meta.ArgsTuple(@TypeOf(f));
+    var args: ArgsTuple = undefined;
+    inline for (@typeInfo(@TypeOf(extra_args)).Struct.fields) |field, i| {
+        const arg_i_str = comptime str: {
+            var str_buf: [100]u8 = undefined;
+            const args_i = i + 1;
+            const str_len = std.fmt.formatIntBuf(&str_buf, args_i, 10, .lower, .{});
+            break :str str_buf[0..str_len];
+        };
+        @field(args, arg_i_str) = @field(extra_args, field.name);
+    }
+
+    const needed_alloc_count = x: {
+        // Try it once with unlimited memory, make sure it works
+        var failing_allocator_inst = std.testing.FailingAllocator.init(backing_allocator, std.math.maxInt(usize));
+        args.@"0" = failing_allocator_inst.allocator();
+        try @call(.{}, f, args);
+        break :x failing_allocator_inst.index;
+    };
+
+    var fail_index: usize = 0;
+    while (fail_index < needed_alloc_count) : (fail_index += 1) {
+        var failing_allocator_inst = std.testing.FailingAllocator.init(backing_allocator, fail_index);
+        args.@"0" = failing_allocator_inst.allocator();
+
+        if (@call(.{}, f, args)) |_| {
+            return error.NondeterministicMemoryUsage;
+        } else |err| switch (err) {
+            error.OutOfMemory => {
+                if (failing_allocator_inst.allocated_bytes != failing_allocator_inst.freed_bytes) {
+                    print(
+                        "\nfail_index: {d}/{d}\nallocated bytes: {d}\nfreed bytes: {d}\nallocations: {d}\ndeallocations: {d}\n",
+                        .{
+                            fail_index,
+                            needed_alloc_count,
+                            failing_allocator_inst.allocated_bytes,
+                            failing_allocator_inst.freed_bytes,
+                            failing_allocator_inst.allocations,
+                            failing_allocator_inst.deallocations,
+                        },
+                    );
+                    return error.MemoryLeakDetected;
+                }
+            },
+            else => return err,
+        }
+    }
 }
