@@ -533,6 +533,37 @@ pub const MetadataMap = struct {
         return entry_index_list.items.len;
     }
 
+    pub const ValueIterator = struct {
+        metadata_map: *const MetadataMap,
+        index_list: []usize,
+        index: usize,
+
+        pub fn next(self: *ValueIterator) ?[]const u8 {
+            if (self.index >= self.index_list.len) {
+                return null;
+            }
+            const entry_index = self.index_list[self.index];
+            self.index += 1;
+            return self.metadata_map.entries.items[entry_index].value;
+        }
+    };
+
+    pub fn valueIterator(self: *MetadataMap, name: []const u8) ValueIterator {
+        if (self.name_to_indexes.getPtr(name)) |entry_index_list| {
+            return ValueIterator{
+                .metadata_map = self,
+                .index_list = entry_index_list.items,
+                .index = 0,
+            };
+        } else {
+            return ValueIterator{
+                .metadata_map = self,
+                .index_list = &[_]usize{},
+                .index = 0,
+            };
+        }
+    }
+
     pub fn getAllAlloc(self: *MetadataMap, allocator: Allocator, name: []const u8) !?[][]const u8 {
         const entry_index_list = (self.name_to_indexes.getPtr(name)) orelse return null;
         if (entry_index_list.items.len == 0) return null;
@@ -599,6 +630,18 @@ test "metadata map" {
     try metadata.putOrReplaceFirst("date", "2019");
     const new_date = metadata.getFirst("date").?;
     try std.testing.expectEqualStrings("2019", new_date);
+
+    var date_it = metadata.valueIterator("date");
+    var num_dates: usize = 0;
+    while (date_it.next()) |value| {
+        switch (num_dates) {
+            0 => try std.testing.expectEqualStrings("2019", value),
+            1 => try std.testing.expectEqualStrings("2018-04-25", value),
+            else => unreachable,
+        }
+        num_dates += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), num_dates);
 }
 
 test "AllMetadata.getXOfType" {
