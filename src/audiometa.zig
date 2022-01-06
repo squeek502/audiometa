@@ -12,6 +12,7 @@ pub const synchsafe = @import("synchsafe.zig");
 pub const unsynch = @import("unsynch.zig");
 pub const buffered_stream_source = @import("buffered_stream_source.zig");
 pub const util = @import("util.zig");
+pub const collate = @import("collate.zig");
 
 test "" {
     std.testing.refAllDecls(@This());
