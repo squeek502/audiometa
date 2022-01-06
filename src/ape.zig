@@ -165,6 +165,11 @@ pub fn readItems(allocator: Allocator, reader: anytype, seekable_stream: anytype
                 defer allocator.free(value);
                 try reader.readNoEof(value);
 
+                // reject invalid UTF-8
+                if (!std.unicode.utf8ValidateSlice(value)) {
+                    continue;
+                }
+
                 try metadata_map.put(key, value);
             },
             // TODO: Maybe do something with binary/external data, for now
