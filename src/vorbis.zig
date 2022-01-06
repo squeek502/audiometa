@@ -52,7 +52,13 @@ pub fn readComment(allocator: Allocator, reader: anytype, seekable_stream: anyty
         var field = split_it.next() orelse return error.InvalidCommentField;
         var value = split_it.rest();
 
-        try metadata_map.put(field, value);
+        // Vorbis comments are case-insensitive, so always convert them to
+        // upper case here in order to make that straightforward on
+        // the storage side of things
+        const field_upper = try std.ascii.allocUpperString(allocator, field);
+        defer allocator.free(field_upper);
+
+        try metadata_map.put(field_upper, value);
     }
 
     return metadata;

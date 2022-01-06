@@ -73,7 +73,7 @@ fn compareEntrySlice(expected: []const MetadataEntry, actual: []const MetadataEn
     expected_loop: for (expected) |field| {
         var found_matching_key = false;
         for (actual) |entry| {
-            if (std.ascii.eqlIgnoreCase(field.name, entry.name)) {
+            if (std.mem.eql(u8, field.name, entry.name)) {
                 if (std.mem.eql(u8, field.value, entry.value)) {
                     continue :expected_loop;
                 }
@@ -607,9 +607,9 @@ test "flac with multiple date fields" {
                 .{ .name = "BARCODE", .value = "647603399720" },
                 .{ .name = "ITUNESADVISORY", .value = "0" },
                 .{ .name = "COPYRIGHT", .value = "(C) 2018 The Flenser" },
-                .{ .name = "Album", .value = "The Unraveling" },
-                .{ .name = "Artist", .value = "Ails" },
-                .{ .name = "Genre", .value = "Metal" },
+                .{ .name = "ALBUM", .value = "The Unraveling" },
+                .{ .name = "ARTIST", .value = "Ails" },
+                .{ .name = "GENRE", .value = "Metal" },
                 .{ .name = "ALBUMARTIST", .value = "Ails" },
                 .{ .name = "DISCNUMBER", .value = "1" },
                 .{ .name = "DATE", .value = "2018" },
