@@ -45,11 +45,15 @@ fn compareAllMetadata(all_expected: *const ExpectedAllMetadata, all_actual: *con
         switch (expected_tag) {
             .id3v2 => {
                 try testing.expectEqual(expected_tag.id3v2.major_version, actual_tag.id3v2.header.major_version);
+
+                try compareEntrySlice(expected_tag.id3v2.user_defined, actual_tag.id3v2.user_defined.entries.items);
+
                 try testing.expectEqual(expected_tag.id3v2.comments.len, actual_tag.id3v2.comments.entries.items.len);
                 for (expected_tag.id3v2.comments) |expected_comment, comment_i| {
                     const actual_comment = actual_tag.id3v2.comments.entries.items[comment_i];
                     try compareFullText(expected_comment, actual_comment);
                 }
+                try testing.expectEqual(expected_tag.id3v2.unsynchronized_lyrics.len, actual_tag.id3v2.unsynchronized_lyrics.entries.items.len);
                 for (expected_tag.id3v2.unsynchronized_lyrics) |expected_lyrics, lyrics_i| {
                     const actual_lyrics = actual_tag.id3v2.unsynchronized_lyrics.entries.items[lyrics_i];
                     try compareFullText(expected_lyrics, actual_lyrics);
@@ -64,19 +68,11 @@ fn compareAllMetadata(all_expected: *const ExpectedAllMetadata, all_actual: *con
     }
 }
 
-fn compareFullText(expected: FullTextEntry, actual: FullTextEntry) !void {
-    try testing.expectEqualStrings(expected.language, actual.language);
-    try testing.expectEqualStrings(expected.description, actual.description);
-    try testing.expectEqualStrings(expected.value, actual.value);
-}
-
-fn compareMetadata(expected: ExpectedMetadata, actual: audiometa.metadata.Metadata) !void {
-    try testing.expectEqual(expected.map.len, actual.map.entries.items.len);
-    try testing.expectEqual(expected.start_offset, actual.start_offset);
-    try testing.expectEqual(expected.end_offset, actual.end_offset);
-    expected_loop: for (expected.map) |field| {
+fn compareEntrySlice(expected: []const MetadataEntry, actual: []const MetadataEntry) !void {
+    try testing.expectEqual(expected.len, actual.len);
+    expected_loop: for (expected) |field| {
         var found_matching_key = false;
-        for (actual.map.entries.items) |entry| {
+        for (actual) |entry| {
             if (std.ascii.eqlIgnoreCase(field.name, entry.name)) {
                 if (std.mem.eql(u8, field.value, entry.value)) {
                     continue :expected_loop;
@@ -91,6 +87,18 @@ fn compareMetadata(expected: ExpectedMetadata, actual: audiometa.metadata.Metada
             return error.MissingField;
         }
     }
+}
+
+fn compareFullText(expected: FullTextEntry, actual: FullTextEntry) !void {
+    try testing.expectEqualStrings(expected.language, actual.language);
+    try testing.expectEqualStrings(expected.description, actual.description);
+    try testing.expectEqualStrings(expected.value, actual.value);
+}
+
+fn compareMetadata(expected: ExpectedMetadata, actual: audiometa.metadata.Metadata) !void {
+    try compareEntrySlice(expected.map, actual.map.entries.items);
+    try testing.expectEqual(expected.start_offset, actual.start_offset);
+    try testing.expectEqual(expected.end_offset, actual.end_offset);
 }
 
 pub const ExpectedTypedMetadata = union(audiometa.metadata.MetadataType) {
@@ -141,6 +149,7 @@ const ExpectedAllMetadata = struct {
 };
 const ExpectedID3v2Metadata = struct {
     metadata: ExpectedMetadata,
+    user_defined: []const MetadataEntry = &[_]MetadataEntry{},
     major_version: u8,
     comments: []const FullTextEntry = &[_]FullTextEntry{},
     unsynchronized_lyrics: []const FullTextEntry = &[_]FullTextEntry{},
@@ -220,9 +229,11 @@ test "id3v2.3 with UTF-16" {
                     .{ .name = "TRCK", .value = "02/11" },
                     .{ .name = "TPOS", .value = "1/1" },
                     .{ .name = "TPE1", .value = "Muga" },
-                    .{ .name = "MEDIAFORMAT", .value = "CD" },
-                    .{ .name = "PERFORMER", .value = "Muga" },
                 },
+            },
+            .user_defined = &[_]MetadataEntry{
+                .{ .name = "MEDIAFORMAT", .value = "CD" },
+                .{ .name = "PERFORMER", .value = "Muga" },
             },
             .comments = &.{.{
                 .language = "eng",
@@ -279,17 +290,19 @@ test "id3v2.3 with user defined fields (TXXX)" {
                     .{ .name = "TRCK", .value = "1/14" },
                     .{ .name = "TPE1", .value = "Acephalix" },
                     .{ .name = "TIT2", .value = "Immanent" },
-                    .{ .name = "Rip date", .value = "2010-09-20" },
                     .{ .name = "TYER", .value = "2010" },
                     .{ .name = "TDAT", .value = "0000" },
-                    .{ .name = "Source", .value = "CD" },
                     .{ .name = "TSSE", .value = "LAME 3.97 (-V2 --vbr-new)" },
-                    .{ .name = "Release type", .value = "Normal release" },
                     .{ .name = "TCON", .value = "Hardcore" },
                     .{ .name = "TPUB", .value = "Prank Records" },
-                    .{ .name = "Catalog #", .value = "Prank 110" },
                     .{ .name = "TALB", .value = "Aporia" },
                 },
+            },
+            .user_defined = &[_]MetadataEntry{
+                .{ .name = "Catalog #", .value = "Prank 110" },
+                .{ .name = "Release type", .value = "Normal release" },
+                .{ .name = "Rip date", .value = "2010-09-20" },
+                .{ .name = "Source", .value = "CD" },
             },
         } },
     } });
@@ -439,8 +452,6 @@ test "id3v2.4 utf16 frames with single u8 delimeters" {
                     .{ .name = "TRCK", .value = "1/9" },
                     .{ .name = "TPOS", .value = "1/1" },
                     .{ .name = "TCOM", .value = "Mar de Grises" },
-                    .{ .name = "PERFORMER", .value = "Mar de Grises" },
-                    .{ .name = "ALBUM ARTIST", .value = "Mar de Grises" },
                     .{ .name = "TIT2", .value = "Starmaker" },
                     .{ .name = "TPE1", .value = "Mar de Grises" },
                     .{ .name = "TALB", .value = "Streams Inwards" },
@@ -449,6 +460,10 @@ test "id3v2.4 utf16 frames with single u8 delimeters" {
                     .{ .name = "TPE2", .value = "Mar de Grises" },
                     .{ .name = "TCON", .value = "Death Metal, doom metal, atmospheric" },
                 },
+            },
+            .user_defined = &[_]MetadataEntry{
+                .{ .name = "PERFORMER", .value = "Mar de Grises" },
+                .{ .name = "ALBUM ARTIST", .value = "Mar de Grises" },
             },
         } },
     } });
@@ -682,11 +697,13 @@ test "id3v2.4 text frame with multiple terminated values" {
                     .{ .name = "TRCK", .value = "2" },
                     .{ .name = "TCOM", .value = "Aram Arslanian" },
                     .{ .name = "TCOM", .value = "Todd Jones" },
-                    .{ .name = "COMMENT", .value = " 00001E45 000026CD 00006B50 00008F5A 0001AB0A 00001ED0 00008611 000087E7 0000976D 00002AC1" },
-                    .{ .name = "COMMENT", .value = " 00000000 00000210 00000924 000000000063EC4C 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000" },
-                    .{ .name = "COMMENT", .value = "D708EF10+171732+16+150+5249+16386+24551+36270+46625+54484+66325+79815+92681+96508+105514+119240+130979+146268+158072" },
-                    .{ .name = "COMMENT", .value = "2" },
                 },
+            },
+            .user_defined = &[_]MetadataEntry{
+                .{ .name = "COMMENT", .value = " 00001E45 000026CD 00006B50 00008F5A 0001AB0A 00001ED0 00008611 000087E7 0000976D 00002AC1" },
+                .{ .name = "COMMENT", .value = " 00000000 00000210 00000924 000000000063EC4C 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000" },
+                .{ .name = "COMMENT", .value = "D708EF10+171732+16+150+5249+16386+24551+36270+46625+54484+66325+79815+92681+96508+105514+119240+130979+146268+158072" },
+                .{ .name = "COMMENT", .value = "2" },
             },
         } },
     } });
@@ -868,20 +885,22 @@ test "ape with id3v2 and id3v1 tags" {
                     .{ .name = "TLAN", .value = "rus" },
                     .{ .name = "TRCK", .value = "1/7" },
                     .{ .name = "TPE1", .value = "Axidance" },
-                    .{ .name = "Rip date", .value = "2012-08-10" },
                     .{ .name = "TYER", .value = "2012" },
                     .{ .name = "TDAT", .value = "0000" },
-                    .{ .name = "Source", .value = "Vinyl" },
                     .{ .name = "TSSE", .value = "LAME v3.98.4 with preset -V0" },
-                    .{ .name = "Ripping tool", .value = "Sony Sound Forge Pro v10.0a" },
-                    .{ .name = "Release type", .value = "Split 12inch" },
                     .{ .name = "TCON", .value = "Hardcore" },
-                    .{ .name = "Language 2-letter", .value = "RU" },
                     .{ .name = "TPUB", .value = "pure heart" },
-                    .{ .name = "VA Artist", .value = "Axidance" },
                     .{ .name = "TALB", .value = "Gattaca" },
                     .{ .name = "TIT2", .value = "Aeon I - The Great Enemy" },
                 },
+            },
+            .user_defined = &[_]MetadataEntry{
+                .{ .name = "VA Artist", .value = "Axidance" },
+                .{ .name = "Language 2-letter", .value = "RU" },
+                .{ .name = "Ripping tool", .value = "Sony Sound Forge Pro v10.0a" },
+                .{ .name = "Release type", .value = "Split 12inch" },
+                .{ .name = "Source", .value = "Vinyl" },
+                .{ .name = "Rip date", .value = "2012-08-10" },
             },
         } },
         .{ .ape = .{

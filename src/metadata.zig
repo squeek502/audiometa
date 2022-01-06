@@ -312,15 +312,17 @@ pub const AllID3v2Metadata = struct {
 };
 
 pub const ID3v2Metadata = struct {
-    metadata: Metadata,
     header: id3v2.ID3Header,
+    metadata: Metadata,
+    user_defined: MetadataMap,
     comments: id3v2_data.FullTextMap,
     unsynchronized_lyrics: id3v2_data.FullTextMap,
 
     pub fn init(allocator: Allocator, header: id3v2.ID3Header, start_offset: usize, end_offset: usize) ID3v2Metadata {
         return .{
-            .metadata = Metadata.initWithOffsets(allocator, start_offset, end_offset),
             .header = header,
+            .metadata = Metadata.initWithOffsets(allocator, start_offset, end_offset),
+            .user_defined = MetadataMap.init(allocator),
             .comments = id3v2_data.FullTextMap.init(allocator),
             .unsynchronized_lyrics = id3v2_data.FullTextMap.init(allocator),
         };
@@ -328,12 +330,14 @@ pub const ID3v2Metadata = struct {
 
     pub fn deinit(self: *ID3v2Metadata) void {
         self.metadata.deinit();
+        self.user_defined.deinit();
         self.comments.deinit();
         self.unsynchronized_lyrics.deinit();
     }
 
     pub fn dump(self: ID3v2Metadata) void {
         self.metadata.map.dump();
+        self.user_defined.dump();
         if (self.comments.entries.items.len > 0) {
             std.debug.print("-- COMM --\n", .{});
             self.comments.dump();
@@ -651,12 +655,14 @@ test "AllMetadata.getXOfType" {
 
     try metadata_buf.append(TypedMetadata{ .id3v2 = ID3v2Metadata{
         .metadata = undefined,
+        .user_defined = undefined,
         .header = undefined,
         .comments = undefined,
         .unsynchronized_lyrics = undefined,
     } });
     try metadata_buf.append(TypedMetadata{ .id3v2 = ID3v2Metadata{
         .metadata = undefined,
+        .user_defined = undefined,
         .header = undefined,
         .comments = undefined,
         .unsynchronized_lyrics = undefined,

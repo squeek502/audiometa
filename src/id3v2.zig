@@ -404,6 +404,7 @@ pub fn readFrame(allocator: Allocator, unsynch_capable_reader: anytype, seekable
     const id3_major_version = metadata_id3v2_container.header.major_version;
     var metadata = &metadata_id3v2_container.metadata;
     var metadata_map = &metadata.map;
+    var user_defined_map = &metadata_id3v2_container.user_defined;
     var comments_map = &metadata_id3v2_container.comments;
     var unsynchronized_lyrics_map = &metadata_id3v2_container.unsynchronized_lyrics;
 
@@ -510,10 +511,10 @@ pub fn readFrame(allocator: Allocator, unsynch_capable_reader: anytype, seekable
             defer text_iterator.deinit();
 
             const field = (try text_iterator.next(.required)) orelse return error.UnexpectedTextDataEnd;
-            const entry = try metadata_map.getOrPutEntry(field);
+            const entry = try user_defined_map.getOrPutEntry(field);
 
             const value = (try text_iterator.next(.optional)) orelse return error.UnexpectedTextDataEnd;
-            try metadata_map.appendToEntry(entry, value);
+            try user_defined_map.appendToEntry(entry, value);
 
             // The spec somewhat explicitly says that the following should not happen,
             // but TagLib does not follow it and I think it makes some sense to
@@ -534,7 +535,7 @@ pub fn readFrame(allocator: Allocator, unsynch_capable_reader: anytype, seekable
             //
             // TODO: Should this actually be here?
             while (try text_iterator.next(.required)) |text| {
-                try metadata_map.appendToEntry(entry, text);
+                try user_defined_map.appendToEntry(entry, text);
             }
         } else {
             // From section 4.2 of https://id3.org/id3v2.4.0-frames:
