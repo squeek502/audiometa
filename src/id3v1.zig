@@ -1,10 +1,5 @@
 const std = @import("std");
-const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
-const synchsafe = @import("synchsafe.zig");
-const latin1 = @import("latin1.zig");
-const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
-const unsynch = @import("unsynch.zig");
 const Metadata = @import("metadata.zig").Metadata;
 const latin1ToUtf8 = @import("latin1.zig").latin1ToUtf8;
 

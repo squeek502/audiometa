@@ -3,6 +3,12 @@ const io = std.io;
 
 pub const ogg_stream_marker = "OggS";
 
+// From 'header_type_flag' of https://xiph.org/ogg/doc/framing.html
+// Potentially useful for the below
+// "TODO: validate header type flag potentially"
+//const fresh_packet = 0x00;
+//const first_page_of_logical_bitstream = 0x02;
+
 /// A wrapping reader that reads (and skips past) Ogg page headers and returns the
 /// data within them
 pub fn OggPageReader(comptime ReaderType: type) type {

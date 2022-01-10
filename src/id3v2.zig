@@ -5,8 +5,9 @@ const synchsafe = @import("synchsafe.zig");
 const latin1 = @import("latin1.zig");
 const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
 const unsynch = @import("unsynch.zig");
-const AllID3v2Metadata = @import("metadata.zig").AllID3v2Metadata;
-const ID3v2Metadata = @import("metadata.zig").ID3v2Metadata;
+const _metadata = @import("metadata");
+const AllID3v2Metadata = _metadata.AllID3v2Metadata;
+const ID3v2Metadata = _metadata.ID3v2Metadata;
 
 pub const id3v2_identifier = "ID3";
 pub const id3v2_footer_identifier = "3DI";

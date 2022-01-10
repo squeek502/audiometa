@@ -1,7 +1,5 @@
 const std = @import("std");
-const Metadata = @import("metadata.zig").Metadata;
 const APEMetadata = @import("metadata.zig").APEMetadata;
-const id3v1 = @import("id3v1.zig");
 const Allocator = std.mem.Allocator;
 
 pub const APEHeader = struct {

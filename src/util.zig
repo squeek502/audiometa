@@ -10,7 +10,7 @@ fn isUtf8ControlCode(c: []const u8) bool {
 // copied from std/fmt.zig but works so that UTF8 still gets printed as a string
 // Useful for avoiding things like printing the Operating System Command (0x9D) control character
 // which can really break terminal printing
-fn formatUtf8SliceEscapeImpl(comptime case: Case) type {
+fn FormatUtf8SliceEscape(comptime case: Case) type {
     const charset = "0123456789" ++ if (case == .upper) "ABCDEF" else "abcdef";
 
     return struct {
@@ -51,8 +51,8 @@ fn formatUtf8SliceEscapeImpl(comptime case: Case) type {
     };
 }
 
-const formatUtf8SliceEscapeLower = formatUtf8SliceEscapeImpl(.lower).f;
-const formatUtf8SliceEscapeUpper = formatUtf8SliceEscapeImpl(.upper).f;
+const formatUtf8SliceEscapeLower = FormatUtf8SliceEscape(.lower).f;
+const formatUtf8SliceEscapeUpper = FormatUtf8SliceEscape(.upper).f;
 
 /// Return a Formatter for a []const u8 where every C0 and C1 control
 /// character is escaped as \xNN, where NN is the character in lowercase

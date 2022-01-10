@@ -1,7 +1,6 @@
 const std = @import("std");
 const audiometa = @import("audiometa");
 const id3 = audiometa.id3v2;
-const flac = audiometa.flac;
 const fmtUtf8SliceEscapeUpper = audiometa.util.fmtUtf8SliceEscapeUpper;
 const meta = audiometa.metadata;
 const MetadataMap = meta.MetadataMap;
@@ -10,7 +9,6 @@ const TypedMetadata = meta.TypedMetadata;
 const ID3v2Metadata = meta.ID3v2Metadata;
 const FullTextEntry = audiometa.id3v2_data.FullTextMap.Entry;
 const AllMetadata = meta.AllMetadata;
-const unsynch = audiometa.unsynch;
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const assert = std.debug.assert;

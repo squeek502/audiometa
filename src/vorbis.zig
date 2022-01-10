@@ -1,9 +1,6 @@
 const std = @import("std");
-const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
-const id3v2 = @import("id3v2.zig");
 const ogg = @import("ogg.zig");
-const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
 const Metadata = @import("metadata.zig").Metadata;
 
 pub const codec_id = "vorbis";
@@ -16,10 +13,6 @@ pub const PacketType = enum(u8) {
     comment = 3,
     setup = 5,
 };
-
-// From 'header_type_flag' of https://xiph.org/ogg/doc/framing.html
-const fresh_packet = 0x00;
-const first_page_of_logical_bitstream = 0x02;
 
 /// Note: It is up to the caller to set metadata start/end offsets, those are not
 /// set within this function

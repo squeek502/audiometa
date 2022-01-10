@@ -1,8 +1,5 @@
 const std = @import("std");
-const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
-const id3v2 = @import("id3v2.zig");
-const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
 const Metadata = @import("metadata.zig").Metadata;
 const vorbis = @import("vorbis.zig");
 
