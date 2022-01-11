@@ -462,6 +462,30 @@ fn compareMetadataMapID3v2(allocator: Allocator, expected: *MetadataMap, actual:
     }
 }
 
+fn compareMetadataMap(expected: *const MetadataMap, actual: *const MetadataMap) !void {
+    expected_loop: for (expected.entries.items) |field| {
+        var found_matching_key = false;
+        for (actual.entries.items) |entry| {
+            if (std.mem.eql(u8, field.name, entry.name)) {
+                if (std.mem.eql(u8, field.value, entry.value)) {
+                    continue :expected_loop;
+                }
+                found_matching_key = true;
+            }
+        }
+        std.debug.print("field: {s}\n", .{fmtUtf8SliceEscapeUpper(field.name)});
+        std.debug.print("\nexpected:\n", .{});
+        expected.dump();
+        std.debug.print("\nactual:\n", .{});
+        actual.dump();
+        if (found_matching_key) {
+            return error.FieldValuesDontMatch;
+        } else {
+            return error.MissingField;
+        }
+    }
+}
+
 fn compareMetadataMapFLAC(expected: *MetadataMap, actual: *MetadataMap) !void {
     expected_loop: for (expected.entries.items) |field| {
         var found_matching_key = false;
@@ -527,6 +551,7 @@ fn compareMetadata(allocator: Allocator, all_expected: *AllMetadata, all_actual:
                     const actual_lyrics = actual_id3v2.unsynchronized_lyrics.entries.items[lyrics_i];
                     try compareFullText(expected_lyrics, actual_lyrics);
                 }
+                try compareMetadataMap(&expected_tag.id3v2.user_defined, &actual_id3v2.user_defined);
                 try compareMetadataMapID3v2(allocator, &expected_tag.getMetadata().map, &actual_id3v2.metadata.map, expected_tag.id3v2.header.major_version);
             },
             .flac => {
@@ -629,7 +654,7 @@ fn getTagLibMetadata(allocator: Allocator, cwd: ?std.fs.Dir, filepath: []const u
             } else if (is_lyrics) {
                 try id3v2_metadata.?.unsynchronized_lyrics.put(language.?, description.?, value);
             } else if (is_usertext) {
-                try id3v2_metadata.?.metadata.map.put(description.?, value);
+                try id3v2_metadata.?.user_defined.put(description.?, value);
             } else {
                 try id3v2_metadata.?.metadata.map.put(frame_id, value);
             }
