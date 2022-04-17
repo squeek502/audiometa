@@ -39,6 +39,10 @@ pub fn main() anyerror!void {
                     std.debug.print("\n#{}: APE Tag (v{d})\n=================\n", .{ i + 1, ape_meta.header_or_footer.version });
                     ape_meta.metadata.map.dump();
                 },
+                .mp4 => |*mp4_meta| {
+                    std.debug.print("\n#{}: MP4\n=======================\n", .{i + 1});
+                    mp4_meta.map.dump();
+                },
             }
         }
     }
