@@ -107,11 +107,12 @@ pub const ExpectedTypedMetadata = union(audiometa.metadata.MetadataType) {
     ape: ExpectedAPEMetadata,
     flac: ExpectedMetadata,
     vorbis: ExpectedMetadata,
+    mp4: ExpectedMetadata,
 
     /// Convenience function to get the ExpectedMetadata for any TypedMetadata
     pub fn getMetadata(typed_meta: ExpectedTypedMetadata) ExpectedMetadata {
         return switch (typed_meta) {
-            .id3v1, .flac, .vorbis => |val| val,
+            .id3v1, .flac, .vorbis, .mp4 => |val| val,
             .id3v2 => |val| val.metadata,
             .ape => |val| val.metadata,
         };
@@ -142,6 +143,10 @@ const ExpectedAllMetadata = struct {
                 .ape => |*ape_meta| {
                     std.debug.print("# APEv{d} 0x{x}-0x{x}\n", .{ ape_meta.version, ape_meta.metadata.start_offset, ape_meta.metadata.end_offset });
                     ape_meta.metadata.dump();
+                },
+                .mp4 => |*mp4_meta| {
+                    std.debug.print("# MP4 0x{x}-0x{x}\n", .{ mp4_meta.start_offset, mp4_meta.end_offset });
+                    mp4_meta.dump();
                 },
             }
         }
