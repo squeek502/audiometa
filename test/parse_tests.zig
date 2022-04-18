@@ -948,3 +948,23 @@ test "ape with id3v2 and id3v1 tags" {
         } },
     } });
 }
+
+test "mp4" {
+    try parseExpectedMetadata("data/test.mp4", .{ .tags = &.{
+        .{ .mp4 = .{
+            .start_offset = 56282,
+            .end_offset = 57359,
+            .map = &[_]MetadataEntry{
+                .{ .name = "album_artist", .value = "Test album artist" },
+                .{ .name = "artist", .value = "Test artist" },
+                .{ .name = "album", .value = "Test album" },
+                .{ .name = "comment", .value = "no comment" },
+                .{ .name = "release_date", .value = "2022" },
+                .{ .name = "genre", .value = "Metal" },
+                .{ .name = "track", .value = "Test title" },
+                .{ .name = "tool", .value = "Lavf58.76.100" },
+                .{ .name = "composer", .value = "Test composer" },
+            },
+        } },
+    } });
+}
