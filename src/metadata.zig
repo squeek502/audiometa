@@ -5,6 +5,7 @@ const id3v1 = @import("id3v1.zig");
 const flac = @import("flac.zig");
 const vorbis = @import("vorbis.zig");
 const ape = @import("ape.zig");
+const mp4 = @import("mp4.zig");
 const Allocator = std.mem.Allocator;
 const fmtUtf8SliceEscapeUpper = @import("util.zig").fmtUtf8SliceEscapeUpper;
 const BufferedStreamSource = @import("buffered_stream_source.zig").BufferedStreamSource;
@@ -101,6 +102,19 @@ pub fn readAll(allocator: Allocator, stream_source: *std.io.StreamSource) !AllMe
             continue;
         }
 
+        try seekable_stream.seekTo(initial_pos);
+        var mp4_metadata: ?Metadata = mp4.read(allocator, reader, seekable_stream) catch |e| switch (e) {
+            error.OutOfMemory => |err| return err,
+            else => null,
+        };
+        if (mp4_metadata != null) {
+            {
+                errdefer mp4_metadata.?.deinit();
+                try all_metadata.append(TypedMetadata{ .mp4 = mp4_metadata.? });
+            }
+            continue;
+        }
+
         // if we get here, then we're out of valid tag headers to parse
         break;
     }
@@ -116,7 +130,7 @@ pub fn readAll(allocator: Allocator, stream_source: *std.io.StreamSource) !AllMe
         if (all_metadata.items.len == 0) break :offset null;
         const last_tag = all_metadata.items[all_metadata.items.len - 1];
         break :offset switch (last_tag) {
-            .id3v1, .flac, .vorbis => |v| v.end_offset,
+            .id3v1, .flac, .vorbis, .mp4 => |v| v.end_offset,
             .id3v2 => |v| v.metadata.end_offset,
             .ape => |v| v.metadata.end_offset,
         };
@@ -191,6 +205,7 @@ pub const MetadataType = enum {
     ape,
     flac,
     vorbis,
+    mp4,
 };
 
 pub const TypedMetadata = union(MetadataType) {
@@ -199,11 +214,12 @@ pub const TypedMetadata = union(MetadataType) {
     ape: APEMetadata,
     flac: Metadata,
     vorbis: Metadata,
+    mp4: Metadata,
 
     /// Convenience function to get the Metadata for any TypedMetadata
     pub fn getMetadata(typed_meta: TypedMetadata) Metadata {
         return switch (typed_meta) {
-            .id3v1, .flac, .vorbis => |val| val,
+            .id3v1, .flac, .vorbis, .mp4 => |val| val,
             .id3v2 => |val| val.metadata,
             .ape => |val| val.metadata,
         };
@@ -220,7 +236,7 @@ pub const AllMetadata = struct {
             // the final capture to be non-const
             // TODO: this feels hacky
             switch (tag.*) {
-                .id3v1, .flac, .vorbis => |*metadata| {
+                .id3v1, .flac, .vorbis, .mp4 => |*metadata| {
                     metadata.deinit();
                 },
                 .id3v2 => |*id3v2_metadata| {
@@ -256,6 +272,10 @@ pub const AllMetadata = struct {
                 .ape => |*ape_meta| {
                     std.debug.print("# APEv{d} 0x{x}-0x{x}\n", .{ ape_meta.header_or_footer.version, ape_meta.metadata.start_offset, ape_meta.metadata.end_offset });
                     ape_meta.metadata.map.dump();
+                },
+                .mp4 => |*mp4_meta| {
+                    std.debug.print("# MP4 0x{x}-0x{x}\n", .{ mp4_meta.start_offset, mp4_meta.end_offset });
+                    mp4_meta.map.dump();
                 },
             }
         }

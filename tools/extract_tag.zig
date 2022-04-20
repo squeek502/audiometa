@@ -40,7 +40,7 @@ pub fn main() anyerror!void {
         const metadata: *const audiometa.metadata.Metadata = switch (tag) {
             .id3v2 => &tag.id3v2.metadata,
             .ape => &tag.ape.metadata,
-            .id3v1, .vorbis, .flac => |*val| val,
+            .id3v1, .vorbis, .flac, .mp4 => |*val| val,
         };
         if (tag == .flac) {
             // FLAC start/end offsets only include the block itself, so we need to provide the headers
