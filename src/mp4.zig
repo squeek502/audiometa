@@ -42,6 +42,10 @@ fn readAtomHeader(reader: anytype, seekable_stream: anytype) !AtomHeader {
         else => |n| n,
     };
 
+    if (size < 8) {
+        return error.AtomSizeTooSmall;
+    }
+
     var name: [4]u8 = undefined;
     _ = try reader.readAll(&name);
 
@@ -63,7 +67,6 @@ const DataAtom = struct {
 
 fn readDataAtom(allocator: Allocator, reader: anytype, seekable_stream: anytype) !DataAtom {
     const atom_header = try readAtomHeader(reader, seekable_stream);
-    if (atom_header.size < 8) return error.InvalidDataAtom;
     if (!std.mem.eql(u8, "data", &atom_header.name)) return error.InvalidDataAtom;
 
     // -8 for the atom header size
@@ -209,6 +212,11 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
     }
 
     return metadata;
+}
+
+test "atom size too small" {
+    const res = readData(std.testing.allocator, "\x00\x00\x00\x00\xe6\x95\xbe");
+    try std.testing.expectError(error.AtomSizeTooSmall, res);
 }
 
 test "unimplemented extended size" {
