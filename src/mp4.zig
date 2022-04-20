@@ -46,6 +46,11 @@ fn readAtomHeader(reader: anytype, seekable_stream: anytype) !AtomHeader {
         return error.AtomSizeTooSmall;
     }
 
+    const remaining = (try seekable_stream.getEndPos()) - (try seekable_stream.getPos());
+    if (size - 8 >= remaining) {
+        return error.EndOfStream;
+    }
+
     var name: [4]u8 = undefined;
     _ = try reader.readAll(&name);
 
@@ -217,6 +222,11 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
 test "atom size too small" {
     const res = readData(std.testing.allocator, "\x00\x00\x00\x00\xe6\x95\xbe");
     try std.testing.expectError(error.AtomSizeTooSmall, res);
+}
+
+test "atom size too big" {
+    const res = readData(std.testing.allocator, "\x11\x11\x11\x11\x20\x20");
+    try std.testing.expectError(error.EndOfStream, res);
 }
 
 test "unimplemented extended size" {
