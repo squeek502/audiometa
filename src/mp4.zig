@@ -64,10 +64,25 @@ fn readAtomHeader(reader: anytype, seekable_stream: anytype) !AtomHeader {
 ///
 /// Its value should be interpreted based on the type indicator and locale indicator.
 /// For our purposes it's probably enough to treat them as UTF-8 strings.
+///
+/// See https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/Metadata/Metadata.html#//apple_ref/doc/uid/TP40000939-CH1-SW27
 const DataAtom = struct {
     type_indicator: u32,
     locale_indicator: u32,
     value: []u8,
+
+    /// Returns the first byte of the "type indicator" field.
+    fn getType(self: DataAtom) u8 {
+        return @intCast(u8, (self.type_indicator & 0xFF000000) >> 24);
+    }
+
+    /// Returns the well-known type of the value. Only valid if the type byte (as returned in `getType`) is 0.
+    ///
+    /// See https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/Metadata/Metadata.html#//apple_ref/doc/uid/TP40000939-CH1-SW34
+    /// for a list of well-known types.
+    fn getWellKnownType(self: DataAtom) u24 {
+        return @intCast(u24, self.type_indicator & 0x00FFFFFF);
+    }
 };
 
 fn readDataAtom(allocator: Allocator, reader: anytype, seekable_stream: anytype) !DataAtom {
@@ -208,6 +223,15 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
                     const data_atom = try readDataAtom(allocator, reader, seekable_stream);
                     defer allocator.free(data_atom.value);
 
+                    // We only care about metadata with the well-known type 1, meaning a UTF-8 string.
+
+                    if (data_atom.getType() != 0) {
+                        return error.InvalidDataAtomType;
+                    }
+                    if (data_atom.getWellKnownType() != 1) {
+                        return error.InvalidDataAtomWellKnownType;
+                    }
+
                     try metadata.map.put(atom.export_name, data_atom.value);
 
                     continue;
@@ -237,6 +261,20 @@ test "data atom size too small" {
 test "atom size too big" {
     const res = readData(std.testing.allocator, "\x11\x11\x11\x11\x20\x20");
     try std.testing.expectError(error.EndOfStream, res);
+}
+
+test "data atom bad type" {
+    // 0xAB is not a valid data atom type
+    const data = "\x00\x00\x00\x08moov\x00\x00\x00\x08udta\x00\x00\x00\x08meta\x01\x00\x00\x00\x00\x00\x00\x08ilst\x00\x00\x00\x08aART\x00\x00\x00\x10data\xAB\x00\x00\x00\x00\x00\x00\x00";
+    const res = readData(std.testing.allocator, data);
+    try std.testing.expectError(error.InvalidDataAtomType, res);
+}
+
+test "data atom bad well-known type" {
+    // 0xFFFFFF is not a valid data atom well-known type
+    const data = "\x00\x00\x00\x08moov\x00\x00\x00\x08udta\x00\x00\x00\x08meta\x01\x00\x00\x00\x00\x00\x00\x08ilst\x00\x00\x00\x08aART\x00\x00\x00\x10data\x00\xFF\xFF\xFF\x00\x00\x00\x00";
+    const res = readData(std.testing.allocator, data);
+    try std.testing.expectError(error.InvalidDataAtomWellKnownType, res);
 }
 
 test "unimplemented extended size" {
