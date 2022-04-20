@@ -74,6 +74,10 @@ fn readDataAtom(allocator: Allocator, reader: anytype, seekable_stream: anytype)
     const atom_header = try readAtomHeader(reader, seekable_stream);
     if (!std.mem.eql(u8, "data", &atom_header.name)) return error.InvalidDataAtom;
 
+    if (atom_header.size < 16) {
+        return error.DataAtomSizeTooSmall;
+    }
+
     // -8 for the atom header size
     // -8 for the data atom "metadata" (type indicator and locale indicator)
     const data_size = atom_header.size - 8 - 8;
@@ -222,6 +226,12 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
 test "atom size too small" {
     const res = readData(std.testing.allocator, "\x00\x00\x00\x00\xe6\x95\xbe");
     try std.testing.expectError(error.AtomSizeTooSmall, res);
+}
+
+test "data atom size too small" {
+    const data = "\x00\x00\x00\x08moov\x00\x00\x00\x08udta\x00\x00\x00\x08meta\x01\x00\x00\x00\x00\x00\x00\x08ilst\x00\x00\x00\x08aART\x00\x00\x00\x0Adata";
+    const res = readData(std.testing.allocator, data);
+    try std.testing.expectError(error.DataAtomSizeTooSmall, res);
 }
 
 test "atom size too big" {
