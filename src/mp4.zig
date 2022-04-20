@@ -37,7 +37,7 @@ fn readAtomHeader(reader: anytype, seekable_stream: anytype) !AtomHeader {
             // a size of 1 means the atom header has an extended size field
             // TODO: implement this if relevant ?
 
-            std.debug.panic("unhandled 64 bit size", .{});
+            return error.UnimplementedExtendedSize;
         },
         else => |n| n,
     };
@@ -209,4 +209,14 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
     }
 
     return metadata;
+}
+
+test "unimplemented extended size" {
+    const res = readData(std.testing.allocator, "\x00\x00\x00\x01\xaa\xbb");
+    try std.testing.expectError(error.UnimplementedExtendedSize, res);
+}
+
+fn readData(allocator: Allocator, data: []const u8) !void {
+    var stream_source = std.io.StreamSource{ .const_buffer = std.io.fixedBufferStream(data) };
+    _ = try read(allocator, stream_source.reader(), stream_source.seekableStream());
 }
