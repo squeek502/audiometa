@@ -240,9 +240,19 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
     var ilst_read: usize = 0;
 
     while (true) {
-        const atom_header = AtomHeader.read(reader, seekable_stream) catch |err| switch (err) {
-            error.EndOfStream => if (metadata.map.entries.items.len > 0) return metadata else return err,
-            else => return err,
+        var start_pos = try seekable_stream.getPos();
+        const atom_header = AtomHeader.read(reader, seekable_stream) catch |err| {
+            // Because of the nature of the mp4 format, we can't really detect when
+            // the metadata is 'done', and instead will always get some type of error
+            // when reading the next header (EndOfStream or an invalid header).
+            // So, if we have already read metadata, then we treat it as a successful read
+            // and return the metadata.
+            // However, we also need to reset the cursor position back to where it was
+            // before this particular attempt at reading a header so that
+            // the cursor position is not part-way through an invalid header when potentially
+            // trying to read something else after this function finishes.
+            try seekable_stream.seekTo(start_pos);
+            if (metadata.map.entries.items.len > 0) return metadata else return err;
         };
 
         switch (state) {
