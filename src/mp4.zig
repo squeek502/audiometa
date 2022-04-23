@@ -212,9 +212,27 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
 
     // A MP4 file is a tree of atoms. An "atom" is the building block of a MP4 container.
     //
+    // First, we verify that the first atom is an `ftyp` atom in order to check that
+    // we are actually reading a MP4 file. This is technically optional according to
+    // https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/QTFFChap1/qtff1.html#//apple_ref/doc/uid/TP40000939-CH203-CJBCBIFF
+    // but 'strongly recommendeded.'
+    //
+    // This verification is done so that we can short-circuit out of non-MP4 files quickly, instead
+    // of skipping around the file randomly due to happens-to-be-valid-enough data.
+
+    var first_atom_header = try AtomHeader.read(reader, seekable_stream);
+    if (!std.mem.eql(u8, "ftyp", &first_atom_header.name)) {
+        return error.MissingFileTypeCompatibilityAtom;
+    }
+    // We don't actually care too much about the contents of the `ftyp` atom, so just skip them
+    // TODO: Should we care about the contents?
+    try seekable_stream.seekBy(first_atom_header.sizeExcludingHeader());
+
     // For our purposes of extracting the audio metadata we assume that the MP4 file
     // respects the following layout which seem to be standard:
     //
+    // ftyp
+    // [...] (potentially other top-level atoms)
     // moov
     //   udta
     //     meta
@@ -222,10 +240,14 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
     //         aART
     //         \xA9alb
     //         \xA9ART
+    //         ...
+    // [...] (potentially other top-level atoms)
     //
     // The data that interests us are the atoms under the "ilst" atom.
     //
-    // The following parser code expects this layout and if it doesn't exist it just fails.
+    // We skip all top-level atoms completely until we find a `moov` atom, and
+    // then drill down to the metadata we care about, still skipping anything we
+    // don't care about.
 
     var state: enum {
         start,
@@ -235,18 +257,20 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
         in_ilst,
     } = .start;
 
-    // Keep track of the size in bytes of the "ilst" atom and how much we already read.
-    var ilst_size: usize = 0;
-    var ilst_read: usize = 0;
+    // Keep track of the end position of the atom we are currently 'inside'
+    // so that we can treat that as the end position of any data we try to read,
+    // since the size of atoms include the size of all of their children, too.
+    var end_of_current_atom: usize = try seekable_stream.getEndPos();
+    var end_of_ilst: usize = 0;
 
     while (true) {
         var start_pos = try seekable_stream.getPos();
         const atom_header = AtomHeader.read(reader, seekable_stream) catch |err| {
             // Because of the nature of the mp4 format, we can't really detect when
-            // the metadata is 'done', and instead will always get some type of error
+            // all of the atoms are 'done', and instead will always get some type of error
             // when reading the next header (EndOfStream or an invalid header).
-            // So, if we have already read metadata, then we treat it as a successful read
-            // and return the metadata.
+            // So, if we have already read some metadata, then we treat it as a successful read
+            // and return that metadata.
             // However, we also need to reset the cursor position back to where it was
             // before this particular attempt at reading a header so that
             // the cursor position is not part-way through an invalid header when potentially
@@ -254,6 +278,8 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
             try seekable_stream.seekTo(start_pos);
             if (metadata.map.entries.items.len > 0) return metadata else return err;
         };
+
+        end_of_current_atom = start_pos + atom_header.size;
 
         switch (state) {
             .start => if (std.mem.eql(u8, "moov", &atom_header.name)) {
@@ -268,32 +294,30 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
                 // The full atom header doesn't interest us but it has to be read.
                 _ = try FullAtomHeader.read(reader);
 
-                // The "meta" atom started at the current stream position minus the standard and full atom header.
-                metadata.start_offset = (try seekable_stream.getPos()) - AtomHeader.len - FullAtomHeader.len;
-                metadata.end_offset = metadata.start_offset + atom_header.size;
+                metadata.start_offset = start_pos;
+                metadata.end_offset = end_of_current_atom;
 
                 state = .in_meta;
                 continue;
             },
             .in_meta => if (std.mem.eql(u8, "ilst", &atom_header.name)) {
                 // Used when handling the in_ilst state to know if there are more elements in the list.
-                ilst_size = atom_header.sizeExcludingHeader();
-
+                end_of_ilst = end_of_current_atom;
                 state = .in_ilst;
                 continue;
             },
             .in_ilst => {
-                // Determine if there's more to read in the "ilst" atom.
-                ilst_read += atom_header.size;
-                if (ilst_read >= ilst_size) {
-                    ilst_read = 0;
-                    ilst_size = 0;
-                    state = .start;
-                }
-
                 if (getMetadataAtom(&atom_header.name)) |atom| {
                     const data_atom = try DataAtom.read(reader, seekable_stream);
                     const maybe_well_known_type = data_atom.indicators.getWellKnownType();
+
+                    // We can do some extra verification here to avoid processing
+                    // invalid atoms by checking that the reported size of the data
+                    // fits inside the reported size of its containing atom.
+                    const data_end_pos: usize = (try seekable_stream.getPos()) + data_atom.dataSize();
+                    if (data_end_pos > end_of_current_atom) {
+                        return error.DataAtomSizeTooLarge;
+                    }
 
                     if (maybe_well_known_type) |well_known_type| {
                         switch (well_known_type) {
@@ -310,9 +334,15 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
                     } else {
                         try data_atom.skipValue(seekable_stream);
                     }
-
-                    continue;
+                } else {
+                    // if we don't recognize the metadata, then skip it
+                    try seekable_stream.seekBy(atom_header.sizeExcludingHeader());
                 }
+
+                if ((try seekable_stream.getPos()) >= end_of_ilst) {
+                    state = .start;
+                }
+                continue;
             },
         }
 
@@ -324,24 +354,38 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
 }
 
 test "atom size too small" {
-    const res = readData(std.testing.allocator, "\x00\x00\x00\x00\xe6\x95\xbe");
+    const res = readData(std.testing.allocator, ftyp_test_data ++ "\x00\x00\x00\x00\xe6\x95\xbe");
     try std.testing.expectError(error.AtomSizeTooSmall, res);
 }
 
 test "data atom size too small" {
-    const data = "\x00\x00\x00\x08moov\x00\x00\x00\x08udta\x00\x00\x00\x08meta\x01\x00\x00\x00\x00\x00\x00\x08ilst\x00\x00\x00\x08aART\x00\x00\x00\x0Adata";
+    const data = try writeTestData(std.testing.allocator, "\x00\x00\x00\x08aART\x00\x00\x00\x0Adata");
+    defer std.testing.allocator.free(data);
+
     const res = readData(std.testing.allocator, data);
     try std.testing.expectError(error.DataAtomSizeTooSmall, res);
 }
 
+test "data atom size too large" {
+    const data = try writeTestData(std.testing.allocator, "\x00\x00\x00\x10aART\x00\x00\x00\x10data\xAB\x00\x00\x00\x00\x00\x00\x00");
+    defer std.testing.allocator.free(data);
+
+    const res = readData(std.testing.allocator, data);
+    try std.testing.expectError(error.DataAtomSizeTooLarge, res);
+}
+
 test "atom size too big" {
-    const res = readData(std.testing.allocator, "\x11\x11\x11\x11\x20\x20");
+    const res = readData(std.testing.allocator, ftyp_test_data ++ "\x11\x11\x11\x11\x20\x20");
     try std.testing.expectError(error.EndOfStream, res);
 }
 
 test "data atom bad type" {
     // 0xAB is not a valid data atom type, it should be skipped
-    const data = "\x00\x00\x00\x08moov\x00\x00\x00\x08udta\x00\x00\x00\x08meta\x01\x00\x00\x00\x00\x00\x00\x30ilst\x00\x00\x00\x08aART\x00\x00\x00\x10data\xAB\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x08\xA9nam\x00\x00\x00\x10data\x00\x00\x00\x01\x00\x00\x00\x00";
+    const invalid_data = "\x00\x00\x00\x18aART\x00\x00\x00\x10data\xAB\x00\x00\x00\x00\x00\x00\x00";
+    const valid_data = "\x00\x00\x00\x18\xA9nam\x00\x00\x00\x10data\x00\x00\x00\x01\x00\x00\x00\x00";
+    const data = try writeTestData(std.testing.allocator, invalid_data ++ valid_data);
+    defer std.testing.allocator.free(data);
+
     var metadata = try readData(std.testing.allocator, data);
     defer metadata.deinit();
 
@@ -351,7 +395,11 @@ test "data atom bad type" {
 
 test "data atom bad well-known type" {
     // 0xFFFFFF is not a valid data atom well-known type, it should be skipped
-    const data = "\x00\x00\x00\x08moov\x00\x00\x00\x08udta\x00\x00\x00\x08meta\x01\x00\x00\x00\x00\x00\x00\x30ilst\x00\x00\x00\x08aART\x00\x00\x00\x10data\x00\xFF\xFF\xFF\x00\x00\x00\x00\x00\x00\x00\x08\xA9nam\x00\x00\x00\x10data\x00\x00\x00\x01\x00\x00\x00\x00";
+    const invalid_data = "\x00\x00\x00\x18aART\x00\x00\x00\x10data\x00\xFF\xFF\xFF\x00\x00\x00\x00";
+    const valid_data = "\x00\x00\x00\x18\xA9nam\x00\x00\x00\x10data\x00\x00\x00\x01\x00\x00\x00\x00";
+    const data = try writeTestData(std.testing.allocator, invalid_data ++ valid_data);
+    defer std.testing.allocator.free(data);
+
     var metadata = try readData(std.testing.allocator, data);
     defer metadata.deinit();
 
@@ -360,8 +408,42 @@ test "data atom bad well-known type" {
 }
 
 test "unimplemented extended size" {
-    const res = readData(std.testing.allocator, "\x00\x00\x00\x01\xaa\xbb");
+    const res = readData(std.testing.allocator, ftyp_test_data ++ "\x00\x00\x00\x01\xaa\xbb");
     try std.testing.expectError(error.UnimplementedExtendedSize, res);
+}
+
+const ftyp_test_data = "\x00\x00\x00\x08ftyp";
+
+fn writeTestData(allocator: Allocator, metadata_payload: []const u8) ![]u8 {
+    var data = std.ArrayList(u8).init(allocator);
+    errdefer data.deinit();
+
+    const moov_len = AtomHeader.len;
+    const udta_len = AtomHeader.len;
+    const meta_len = AtomHeader.len + FullAtomHeader.len;
+    const ilst_len = AtomHeader.len;
+
+    var writer = data.writer();
+    try writer.writeAll(ftyp_test_data);
+
+    var atom_len: u32 = moov_len + udta_len + meta_len + ilst_len + @intCast(u32, metadata_payload.len);
+    try writer.writeIntBig(u32, atom_len);
+    try writer.writeAll("moov");
+    atom_len -= moov_len;
+    try writer.writeIntBig(u32, atom_len);
+    try writer.writeAll("udta");
+    atom_len -= udta_len;
+    try writer.writeIntBig(u32, atom_len);
+    try writer.writeAll("meta");
+    try writer.writeByte(1);
+    try writer.writeIntBig(u24, 0);
+    atom_len -= meta_len;
+    try writer.writeIntBig(u32, atom_len);
+    try writer.writeAll("ilst");
+
+    try writer.writeAll(metadata_payload);
+
+    return data.toOwnedSlice();
 }
 
 fn readData(allocator: Allocator, data: []const u8) !Metadata {
