@@ -7,9 +7,27 @@ fn isUtf8ControlCode(c: []const u8) bool {
     return c.len == 2 and c[0] == '\xC2' and c[1] >= '\x80' and c[1] <= '\x9F';
 }
 
-// copied from std/fmt.zig but works so that UTF8 still gets printed as a string
-// Useful for avoiding things like printing the Operating System Command (0x9D) control character
-// which can really break terminal printing
+/// Like std.unicode.Utf8Iterator, but handles invalid UTF-8 without panicing
+pub const InvalidUtf8Iterator = struct {
+    bytes: []const u8,
+    i: usize,
+
+    /// On invalid UTF-8, returns an error
+    pub fn nextCodepointSlice(it: *InvalidUtf8Iterator) !?[]const u8 {
+        if (it.i >= it.bytes.len) {
+            return null;
+        }
+
+        const cp_len = try std.unicode.utf8ByteSequenceLength(it.bytes[it.i]);
+        it.i += cp_len;
+        return it.bytes[it.i - cp_len .. it.i];
+    }
+};
+
+/// Copied from std/fmt.zig but works so that UTF8 still gets printed as a string
+/// Useful for avoiding things like printing the Operating System Command (0x9D) control character
+/// which can really break terminal printing
+/// Also allows invalid UTF-8 to be printed (the invalid bytes will likely be escaped).
 fn FormatUtf8SliceEscape(comptime case: Case) type {
     const charset = "0123456789" ++ if (case == .upper) "ABCDEF" else "abcdef";
 
@@ -27,8 +45,14 @@ fn FormatUtf8SliceEscape(comptime case: Case) type {
             buf[0] = '\\';
             buf[1] = 'x';
 
-            var it = std.unicode.Utf8Iterator{ .bytes = bytes, .i = 0 };
-            while (it.nextCodepointSlice()) |c| {
+            var it = InvalidUtf8Iterator{ .bytes = bytes, .i = 0 };
+            while (it.nextCodepointSlice() catch c: {
+                // On invalid UTF-8, treat the first byte as the 'codepoint slice'
+                // and then move past that char.
+                // This should always write an escaped character within the loop.
+                it.i += 1;
+                break :c it.bytes[it.i - 1 .. it.i];
+            }) |c| {
                 if (c.len == 1) {
                     if (std.ascii.isPrint(c[0])) {
                         try writer.writeByte(c[0]);
