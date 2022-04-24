@@ -211,7 +211,8 @@ test "music folder" {
         const extension = std.fs.path.extension(entry.basename);
         const is_mp3 = std.ascii.eqlIgnoreCase(extension, ".mp3");
         const is_flac = std.ascii.eqlIgnoreCase(extension, ".flac");
-        const readable = is_mp3 or is_flac;
+        const is_m4a = std.ascii.eqlIgnoreCase(extension, ".m4a");
+        const readable = is_mp3 or is_flac or is_m4a;
         if (!readable) continue;
 
         std.debug.print("\n{s}\n", .{fmtUtf8SliceEscapeUpper(entry.path)});
@@ -562,6 +563,14 @@ fn compareMetadata(allocator: Allocator, all_expected: *AllMetadata, all_actual:
                 const actual_flac = maybe_actual_flac.?;
                 try compareMetadataMapFLAC(&expected_tag.getMetadata().map, &actual_flac.map);
             },
+            .mp4 => {
+                const maybe_actual_mp4 = all_actual.getFirstMetadataOfType(.mp4);
+                if (maybe_actual_mp4 == null) {
+                    return error.MissingMP4;
+                }
+                const actual_mp4 = maybe_actual_mp4.?;
+                try compareMetadataMap(&expected_tag.getMetadata().map, &actual_mp4.map);
+            },
             else => @panic("TODO: comparisons for more tag types supported by taglib"),
         }
     }
@@ -702,9 +711,44 @@ fn getTagLibMetadata(allocator: Allocator, cwd: ?std.fs.Dir, filepath: []const u
         }
     }
 
+    var mp4_metadata: ?Metadata = null;
+    errdefer if (mp4_metadata != null) mp4_metadata.?.deinit();
+
+    const mp4_start_string = "MP4:::::::::\n";
+    const maybe_mp4_start = std.mem.indexOf(u8, result.stdout, mp4_start_string);
+    if (maybe_mp4_start) |mp4_start| {
+        const mp4_data_start = mp4_start + mp4_start_string.len;
+        var mp4_data = result.stdout[mp4_data_start..];
+
+        mp4_metadata = Metadata.init(allocator);
+
+        while (true) {
+            var equals_index = std.mem.indexOfScalar(u8, mp4_data, '=') orelse break;
+            var name = mp4_data[0..equals_index];
+            const value_start_index = equals_index + 1;
+            const start_value_string = "[====[";
+            var start_quote_index = std.mem.indexOf(u8, mp4_data[value_start_index..], start_value_string) orelse break;
+            const abs_after_start_quote_index = value_start_index + start_quote_index + start_value_string.len;
+            const end_value_string = "]====]";
+            var end_quote_index = std.mem.indexOf(u8, mp4_data[abs_after_start_quote_index..], end_value_string) orelse break;
+            const abs_end_quote_index = abs_after_start_quote_index + end_quote_index;
+            var value = mp4_data[abs_after_start_quote_index..abs_end_quote_index];
+
+            try mp4_metadata.?.map.put(name, value);
+
+            var after_linebreaks = abs_end_quote_index + end_value_string.len;
+            while (after_linebreaks < mp4_data.len and mp4_data[after_linebreaks] == '\n') {
+                after_linebreaks += 1;
+            }
+
+            mp4_data = mp4_data[after_linebreaks..];
+        }
+    }
+
     var count: usize = 0;
     if (id3v2_metadata != null) count += 1;
     if (flac_metadata != null) count += 1;
+    if (mp4_metadata != null) count += 1;
 
     var tags_slice = try allocator.alloc(TypedMetadata, count);
     errdefer allocator.free(tags_slice);
@@ -716,6 +760,10 @@ fn getTagLibMetadata(allocator: Allocator, cwd: ?std.fs.Dir, filepath: []const u
     }
     if (flac_metadata) |val| {
         tags_slice[tag_index] = .{ .flac = val };
+        tag_index += 1;
+    }
+    if (mp4_metadata) |val| {
+        tags_slice[tag_index] = .{ .mp4 = val };
         tag_index += 1;
     }
 
