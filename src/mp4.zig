@@ -28,7 +28,9 @@ pub const AtomHeader = struct {
     /// whether or not this atom has its size speicfied in an extended size field
     extended_size: bool,
 
+    /// Length of a normal atom header (without an extended size field)
     pub const len = 8;
+    /// Length of an extended size field (if it exists)
     pub const extended_size_field_len = 8;
 
     pub fn read(reader: anytype, seekable_stream: anytype) !AtomHeader {
@@ -51,7 +53,7 @@ pub const AtomHeader = struct {
             else => |size| size,
         };
 
-        if (header.size < AtomHeader.len) {
+        if (header.size < header.headerSize()) {
             return error.AtomSizeTooSmall;
         }
 
@@ -63,9 +65,13 @@ pub const AtomHeader = struct {
         return header;
     }
 
-    pub fn sizeExcludingHeader(self: AtomHeader) u64 {
+    pub fn headerSize(self: AtomHeader) u64 {
         const extended_len: u64 = if (self.extended_size) AtomHeader.extended_size_field_len else 0;
-        return self.size - AtomHeader.len - extended_len;
+        return AtomHeader.len + extended_len;
+    }
+
+    pub fn sizeExcludingHeader(self: AtomHeader) u64 {
+        return self.size - self.headerSize();
     }
 };
 
