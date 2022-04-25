@@ -1,6 +1,6 @@
 # audiometa
 
-An audio metadata/tag reading library (currently supports ID3v2, ID3v1, FLAC, APE, Ogg Vorbis) written in [Zig](https://ziglang.org/).
+An audio metadata/tag reading library written in [Zig](https://ziglang.org/). Currently supports ID3v2, ID3v1, FLAC, APE, Ogg Vorbis, MP4/M4A.
 
 **still heavily work-in-progress, everything is subject to change**
 
@@ -25,5 +25,4 @@ An audio metadata/tag reading library (currently supports ID3v2, ID3v1, FLAC, AP
 
 ### TagLib
 
-- TagLib seems to be heavily geared towards reading tags for direct manipulation rather than for display. For example, as far as I can tell, its API makes it hard to get UTF-8 strings for all frames.
 - TagLib completely ignores all ID3v2 tags past the first one
