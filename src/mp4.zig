@@ -5,7 +5,7 @@ const id3v1 = @import("id3v1.zig"); // needed for genre ID lookup for gnre atom
 
 // Some atoms can be "full atoms", meaning they have an additional 4 bytes
 // for a version and some flags.
-const FullAtomHeader = struct {
+pub const FullAtomHeader = struct {
     version: u8,
     flags: u24,
 
@@ -20,7 +20,7 @@ const FullAtomHeader = struct {
 };
 
 /// Every atom in a MP4 file has this fixed-size header
-const AtomHeader = struct {
+pub const AtomHeader = struct {
     /// the atom size (including the header size of 8 bytes)
     size: u32,
     /// the name or type
@@ -66,7 +66,7 @@ const AtomHeader = struct {
 /// Generic data atom
 ///
 /// See https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/Metadata/Metadata.html#//apple_ref/doc/uid/TP40000939-CH1-SW27
-const DataAtom = struct {
+pub const DataAtom = struct {
     header: AtomHeader,
     indicators: Indicators,
 

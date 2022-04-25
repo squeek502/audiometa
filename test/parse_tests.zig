@@ -952,8 +952,8 @@ test "ape with id3v2 and id3v1 tags" {
 test "mp4" {
     try parseExpectedMetadata("data/test.mp4", .{ .tags = &.{
         .{ .mp4 = .{
-            .start_offset = 56282,
-            .end_offset = 57359,
+            .start_offset = 0x18,
+            .end_offset = 0x44d,
             .map = &[_]MetadataEntry{
                 .{ .name = "aART", .value = "Test album artist" },
                 .{ .name = "\xA9ART", .value = "Test artist" },

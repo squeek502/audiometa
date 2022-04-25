@@ -50,6 +50,11 @@ pub fn main() anyerror!void {
             try buf_writer.writeByte(audiometa.flac.block_type_vorbis_comment | is_last_metadata_block);
             try buf_writer.writeIntBig(u24, @intCast(u24, metadata.end_offset - metadata.start_offset));
             try sliceFileIntoBuf(&buf, file, metadata.start_offset, metadata.end_offset);
+        } else if (tag == .mp4) {
+            // MP4 start/end offsets only include the 'meta' atom, so we need to provide the ftyp and moov atoms
+            const meta_data_len = metadata.end_offset - metadata.start_offset;
+            try writeMp4Atoms(buf.writer(), @intCast(u32, meta_data_len));
+            try sliceFileIntoBuf(&buf, file, metadata.start_offset, metadata.end_offset);
         } else {
             try sliceFileIntoBuf(&buf, file, metadata.start_offset, metadata.end_offset);
         }
@@ -69,4 +74,19 @@ fn sliceFileIntoBuf(buf: *std.ArrayList(u8), file: std.fs.File, start_offset: us
     const bytes_read = try file.pread(buf_slice, start_offset);
     assert(bytes_read == contents_len);
     buf.items.len += bytes_read;
+}
+
+fn writeMp4Atoms(writer: anytype, meta_atom_len: u32) !void {
+    const moov_len = audiometa.mp4.AtomHeader.len;
+    const udta_len = audiometa.mp4.AtomHeader.len;
+
+    const minimal_ftyp_data = "\x00\x00\x00\x08ftyp";
+    try writer.writeAll(minimal_ftyp_data);
+
+    var atom_len: u32 = moov_len + udta_len + meta_atom_len;
+    try writer.writeIntBig(u32, atom_len);
+    try writer.writeAll("moov");
+    atom_len -= moov_len;
+    try writer.writeIntBig(u32, atom_len);
+    try writer.writeAll("udta");
 }
