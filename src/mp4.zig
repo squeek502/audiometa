@@ -21,27 +21,34 @@ pub const FullAtomHeader = struct {
 
 /// Every atom in a MP4 file has this fixed-size header
 pub const AtomHeader = struct {
-    /// the atom size (including the header size of 8 bytes)
-    size: u32,
+    /// the atom size (including the header)
+    size: u64,
     /// the name or type
     name: [4]u8,
+    /// whether or not this atom has its size speicfied in an extended size field
+    extended_size: bool,
 
     pub const len = 8;
+    pub const extended_size_field_len = 8;
 
     pub fn read(reader: anytype, seekable_stream: anytype) !AtomHeader {
         var header: AtomHeader = undefined;
-        header.size = switch (try reader.readIntBig(u32)) {
+        header.extended_size = false;
+        const size_field = try reader.readIntBig(u32);
+        try reader.readNoEof(&header.name);
+
+        header.size = switch (size_field) {
             0 => blk: {
                 // a size of 0 means the atom extends to end of file
                 const remaining = (try seekable_stream.getEndPos()) - (try seekable_stream.getPos());
-                break :blk @intCast(u32, remaining);
+                break :blk remaining;
             },
-            1 => {
+            1 => blk: {
                 // a size of 1 means the atom header has an extended size field
-                // TODO: implement this if relevant ?
-                return error.UnimplementedExtendedSize;
+                header.extended_size = true;
+                break :blk try reader.readIntBig(u64);
             },
-            else => |n| n,
+            else => |size| size,
         };
 
         if (header.size < AtomHeader.len) {
@@ -49,17 +56,16 @@ pub const AtomHeader = struct {
         }
 
         const remaining = (try seekable_stream.getEndPos()) - (try seekable_stream.getPos());
-        if (header.sizeExcludingHeader() >= remaining) {
+        if (header.sizeExcludingHeader() > remaining) {
             return error.EndOfStream;
         }
-
-        _ = try reader.readAll(&header.name);
 
         return header;
     }
 
-    pub fn sizeExcludingHeader(self: AtomHeader) u32 {
-        return self.size - AtomHeader.len;
+    pub fn sizeExcludingHeader(self: AtomHeader) u64 {
+        const extended_len: u64 = if (self.extended_size) AtomHeader.extended_size_field_len else 0;
+        return self.size - AtomHeader.len - extended_len;
     }
 };
 
@@ -153,7 +159,7 @@ pub const DataAtom = struct {
         };
     };
 
-    pub fn dataSize(self: DataAtom) u32 {
+    pub fn dataSize(self: DataAtom) u64 {
         return self.header.sizeExcludingHeader() - Indicators.len;
     }
 
@@ -169,7 +175,7 @@ pub const DataAtom = struct {
 
     pub fn skipValue(self: DataAtom, seekable_stream: anytype) !void {
         const data_size = self.dataSize();
-        try seekable_stream.seekBy(data_size);
+        try seekByExtended(seekable_stream, data_size);
     }
 };
 
@@ -349,7 +355,7 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
     }
     // We don't actually care too much about the contents of the `ftyp` atom, so just skip them
     // TODO: Should we care about the contents?
-    try seekable_stream.seekBy(first_atom_header.sizeExcludingHeader());
+    try seekByExtended(seekable_stream, first_atom_header.sizeExcludingHeader());
 
     // For our purposes of extracting the audio metadata we assume that the MP4 file
     // respects the following layout which seem to be standard:
@@ -436,7 +442,6 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
                     error.DataAtomSizeTooSmall,
                     error.InvalidDataAtom,
                     error.AtomSizeTooSmall,
-                    error.UnimplementedExtendedSize,
                     error.InvalidUTF16Data,
                     => {
                         try seekable_stream.seekTo(end_of_current_atom);
@@ -452,14 +457,24 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
         }
 
         // Skip every atom we don't recognize or are not interested in.
-        try seekable_stream.seekBy(atom_header.sizeExcludingHeader());
+        try seekByExtended(seekable_stream, atom_header.sizeExcludingHeader());
     }
 
     return metadata;
 }
 
+/// SeekableStream.seekBy wrapper that allows for u64 sizes
+fn seekByExtended(seekable_stream: anytype, amount: u64) !void {
+    if (std.math.cast(u32, amount)) |seek_amount| {
+        try seekable_stream.seekBy(seek_amount);
+    } else |_| {
+        try seekable_stream.seekBy(@intCast(u32, amount & 0xFFFFFFFF));
+        try seekable_stream.seekBy(@intCast(u32, amount >> 32));
+    }
+}
+
 test "atom size too small" {
-    const res = readData(std.testing.allocator, ftyp_test_data ++ "\x00\x00\x00\x00\xe6\x95\xbe");
+    const res = readData(std.testing.allocator, ftyp_test_data ++ "\x00\x00\x00\x03moov");
     try std.testing.expectError(error.AtomSizeTooSmall, res);
 }
 
@@ -525,9 +540,16 @@ test "data atom bad well-known type" {
     try std.testing.expectEqual(@as(usize, 1), metadata.map.entries.items.len);
 }
 
-test "unimplemented extended size" {
-    const res = readData(std.testing.allocator, ftyp_test_data ++ "\x00\x00\x00\x01\xaa\xbb");
-    try std.testing.expectError(error.UnimplementedExtendedSize, res);
+test "extended size" {
+    const valid_data_with_extended_size = "\x00\x00\x00\x01\xA9nam\x00\x00\x00\x00\x00\x00\x00\x20\x00\x00\x00\x10data\x00\x00\x00\x01\x00\x00\x00\x00";
+    const data = try writeTestData(std.testing.allocator, valid_data_with_extended_size);
+    defer std.testing.allocator.free(data);
+
+    var metadata = try readData(std.testing.allocator, data);
+    defer metadata.deinit();
+
+    // the valid atom should be read
+    try std.testing.expectEqual(@as(usize, 1), metadata.map.entries.items.len);
 }
 
 const ftyp_test_data = "\x00\x00\x00\x08ftyp";
