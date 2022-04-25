@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Metadata = @import("metadata.zig").Metadata;
+const id3v1 = @import("id3v1.zig"); // needed for genre ID lookup for gnre atom
 
 // Some atoms can be "full atoms", meaning they have an additional 4 bytes
 // for a version and some flags.
@@ -130,8 +131,8 @@ const DataAtom = struct {
             utf16_sort = 5,
             jpeg = 13,
             png = 14,
-            be_signed_integer = 21,
-            be_unsigned_integer = 22,
+            be_signed_integer = 21, // 1, 2, 3, or 4 bytes
+            be_unsigned_integer = 22, // 1, 2, 3, or 4 bytes
             be_float32 = 23,
             be_float64 = 24,
             bmp = 27,
@@ -172,32 +173,148 @@ const DataAtom = struct {
     }
 };
 
-const MetadataAtom = struct {
-    name: []const u8,
-    export_name: []const u8 = "",
-};
+/// Reads a single `ilst` data atom and adds it to the metadata if it's valid
+pub fn readIlstData(allocator: Allocator, reader: anytype, seekable_stream: anytype, metadata: *Metadata, atom_header: AtomHeader, end_of_containing_atom: usize) !void {
+    const data_atom = try DataAtom.read(reader, seekable_stream);
+    const maybe_well_known_type = data_atom.indicators.getWellKnownType();
 
-// zig fmt: off
-const metadata_atoms = &[_]MetadataAtom{
-    .{ .name = "\xA9nam", .export_name = "track"        },
-    .{ .name = "\xA9alb", .export_name = "album"        },
-    .{ .name = "\xA9ART", .export_name = "artist"       },
-    .{ .name = "aART"   , .export_name = "album_artist" },
-    .{ .name = "\xA9des", .export_name = "description"  },
-    .{ .name = "\xA9day", .export_name = "release_date" },
-    .{ .name = "\xA9cmt", .export_name = "comment"      },
-    .{ .name = "\xA9too", .export_name = "tool"         },
-    .{ .name = "\xA9gen", .export_name = "genre"        },
-    .{ .name = "\xA9wrt", .export_name = "composer"     },
-    .{ .name = "\xA9cpy", .export_name = "copyright"    },
-};
-// zig fmt: on
-
-fn getMetadataAtom(name: []const u8) ?MetadataAtom {
-    inline for (metadata_atoms) |atom| {
-        if (std.mem.eql(u8, atom.name, name)) return atom;
+    // We can do some extra verification here to avoid processing
+    // invalid atoms by checking that the reported size of the data
+    // fits inside the reported size of its containing atom.
+    const data_end_pos: usize = (try seekable_stream.getPos()) + data_atom.dataSize();
+    if (data_end_pos > end_of_containing_atom) {
+        return error.DataAtomSizeTooLarge;
     }
-    return null;
+
+    if (maybe_well_known_type) |well_known_type| {
+        switch (well_known_type) {
+            .utf8 => {
+                var value = try data_atom.readValueAsBytes(allocator, reader);
+                defer allocator.free(value);
+
+                try metadata.map.put(&atom_header.name, value);
+            },
+            // TODO: Verify that the UTF-16 case works correctly--I didn't have any
+            //       files with UTF-16 data atoms.
+            .utf16_be => {
+                var value_bytes = try allocator.alignedAlloc(u8, @alignOf(u16), data_atom.dataSize());
+                defer allocator.free(value_bytes);
+
+                try reader.readNoEof(value_bytes);
+
+                var value_utf16 = std.mem.bytesAsSlice(u16, value_bytes);
+
+                // swap the bytes to make it little-endian instead of big-endian
+                for (value_utf16) |c, i| {
+                    value_utf16[i] = @byteSwap(u16, c);
+                }
+
+                // convert to UTF-8
+                var value_utf8 = std.unicode.utf16leToUtf8Alloc(allocator, value_utf16) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.InvalidUTF16Data,
+                };
+                try metadata.map.put(&atom_header.name, value_utf8);
+            },
+            .be_signed_integer, .be_unsigned_integer => {
+                var size = data_atom.dataSize();
+                if (size > 4) {
+                    return error.DataAtomSizeTooLarge;
+                }
+                var value_buf: [4]u8 = undefined;
+                var value_bytes = value_buf[0..size];
+                try reader.readNoEof(value_bytes);
+
+                // TODO: There's probably a better way to do this
+                const value_int: i64 = switch (well_known_type) {
+                    .be_unsigned_integer => switch (size) {
+                        1 => std.mem.readIntSliceBig(u8, value_bytes),
+                        2 => std.mem.readIntSliceBig(u16, value_bytes),
+                        3 => std.mem.readIntSliceBig(u24, value_bytes),
+                        4 => std.mem.readIntSliceBig(u32, value_bytes),
+                        else => unreachable,
+                    },
+                    .be_signed_integer => switch (size) {
+                        1 => std.mem.readIntSliceBig(i8, value_bytes),
+                        2 => std.mem.readIntSliceBig(i16, value_bytes),
+                        3 => std.mem.readIntSliceBig(i24, value_bytes),
+                        4 => std.mem.readIntSliceBig(i32, value_bytes),
+                        else => unreachable,
+                    },
+                    else => unreachable,
+                };
+
+                const longest_possible_string = "-2147483648";
+                var int_string_buf: [longest_possible_string.len]u8 = undefined;
+                const value_utf8 = std.fmt.bufPrintIntToSlice(&int_string_buf, value_int, 10, .lower, .{});
+
+                try metadata.map.put(&atom_header.name, value_utf8);
+            },
+            .reserved => {
+                // these atoms have two 16-bit integer values
+                if (std.mem.eql(u8, "trkn", &atom_header.name) or std.mem.eql(u8, "disk", &atom_header.name)) {
+                    if (data_atom.dataSize() < 4) {
+                        return error.InvalidDataAtom;
+                    }
+                    const longest_possible_string = "65535/65535";
+                    var utf8_buf: [longest_possible_string.len]u8 = undefined;
+                    var utf8_fbs = std.io.fixedBufferStream(&utf8_buf);
+                    var utf8_writer = utf8_fbs.writer();
+
+                    // the first 16 bits are unknown
+                    _ = try reader.readIntBig(u16);
+                    // second 16 bits is the 'current' number
+                    const current = try reader.readIntBig(u16);
+                    // after that is the 'total' number (if present)
+                    const maybe_total: ?u16 = total: {
+                        if (data_atom.dataSize() >= 6) {
+                            const val = try reader.readIntBig(u16);
+                            break :total if (val != 0) val else null;
+                        } else {
+                            break :total null;
+                        }
+                    };
+                    // there can be trailing bytes as well that are unknown, so
+                    // just skip to the end
+                    try seekable_stream.seekTo(end_of_containing_atom);
+
+                    if (maybe_total) |total| {
+                        utf8_writer.print("{}/{}", .{ current, total }) catch unreachable;
+                    } else {
+                        utf8_writer.print("{}", .{current}) catch unreachable;
+                    }
+
+                    try metadata.map.put(&atom_header.name, utf8_fbs.getWritten());
+                } else if (std.mem.eql(u8, "gnre", &atom_header.name)) {
+                    if (data_atom.dataSize() != 2) {
+                        return error.InvalidDataAtom;
+                    }
+                    // Note: The first byte having any non-zero value
+                    // will make the genre lookup impossible, since ID3v1
+                    // genres are limited to a u8, so reading it as a u16
+                    // will better exclude invalid gnre atoms.
+                    //
+                    // TODO: This needs verification that this is the correct
+                    //       data type / handling of the value (ffmpeg skips
+                    //       the first byte, and TagLib reads it as a i16).
+                    const genre_id_plus_one = try reader.readIntBig(u16);
+                    if (genre_id_plus_one > 0 and genre_id_plus_one <= id3v1.id3v1_genre_names.len) {
+                        const genre_id = genre_id_plus_one - 1;
+                        const genre_name = id3v1.id3v1_genre_names[genre_id];
+                        try metadata.map.put(&atom_header.name, genre_name);
+                    }
+                } else {
+                    // any other reserved type is unknown, though
+                    try data_atom.skipValue(seekable_stream);
+                }
+            },
+            else => {
+                try data_atom.skipValue(seekable_stream);
+            },
+        }
+    } else {
+        try data_atom.skipValue(seekable_stream);
+    }
 }
 
 /// Reads the metadata from an MP4 file.
@@ -307,37 +424,19 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
                 continue;
             },
             .in_ilst => {
-                if (getMetadataAtom(&atom_header.name)) |atom| {
-                    const data_atom = try DataAtom.read(reader, seekable_stream);
-                    const maybe_well_known_type = data_atom.indicators.getWellKnownType();
-
-                    // We can do some extra verification here to avoid processing
-                    // invalid atoms by checking that the reported size of the data
-                    // fits inside the reported size of its containing atom.
-                    const data_end_pos: usize = (try seekable_stream.getPos()) + data_atom.dataSize();
-                    if (data_end_pos > end_of_current_atom) {
-                        return error.DataAtomSizeTooLarge;
-                    }
-
-                    if (maybe_well_known_type) |well_known_type| {
-                        switch (well_known_type) {
-                            .utf8 => {
-                                var value = try data_atom.readValueAsBytes(allocator, reader);
-                                defer allocator.free(value);
-
-                                try metadata.map.put(atom.export_name, value);
-                            },
-                            else => {
-                                try data_atom.skipValue(seekable_stream);
-                            },
-                        }
-                    } else {
-                        try data_atom.skipValue(seekable_stream);
-                    }
-                } else {
-                    // if we don't recognize the metadata, then skip it
-                    try seekable_stream.seekBy(atom_header.sizeExcludingHeader());
-                }
+                readIlstData(allocator, reader, seekable_stream, &metadata, atom_header, end_of_current_atom) catch |err| switch (err) {
+                    // Some errors within the ilst can be recovered from by skipping the invalid atom
+                    error.DataAtomSizeTooLarge,
+                    error.DataAtomSizeTooSmall,
+                    error.InvalidDataAtom,
+                    error.AtomSizeTooSmall,
+                    error.UnimplementedExtendedSize,
+                    error.InvalidUTF16Data,
+                    => {
+                        try seekable_stream.seekTo(end_of_current_atom);
+                    },
+                    else => |e| return e,
+                };
 
                 if ((try seekable_stream.getPos()) >= end_of_ilst) {
                     state = .start;
@@ -359,19 +458,32 @@ test "atom size too small" {
 }
 
 test "data atom size too small" {
-    const data = try writeTestData(std.testing.allocator, "\x00\x00\x00\x08aART\x00\x00\x00\x0Adata");
+    // 0x0A is too small of a size for the data atom, so it should be skipped
+    const invalid_data = "\x00\x00\x00\x10aART\x00\x00\x00\x0Adata";
+    const valid_data = "\x00\x00\x00\x18\xA9nam\x00\x00\x00\x10data\x00\x00\x00\x01\x00\x00\x00\x00";
+    const data = try writeTestData(std.testing.allocator, invalid_data ++ valid_data);
     defer std.testing.allocator.free(data);
 
-    const res = readData(std.testing.allocator, data);
-    try std.testing.expectError(error.DataAtomSizeTooSmall, res);
+    var metadata = try readData(std.testing.allocator, data);
+    defer metadata.deinit();
+
+    // the invalid atom should be skipped but the valid one should be read
+    try std.testing.expectEqual(@as(usize, 1), metadata.map.entries.items.len);
 }
 
 test "data atom size too large" {
-    const data = try writeTestData(std.testing.allocator, "\x00\x00\x00\x10aART\x00\x00\x00\x10data\xAB\x00\x00\x00\x00\x00\x00\x00");
+    // data atom's reported size is too large to be contained in its containing atom, so it should be skipped
+    const invalid_data = "\x00\x00\x00\x10aART\x00\x00\x00\x10data";
+    const valid_data = "\x00\x00\x00\x18\xA9nam\x00\x00\x00\x10data\x00\x00\x00\x01\x00\x00\x00\x00";
+
+    const data = try writeTestData(std.testing.allocator, invalid_data ++ valid_data);
     defer std.testing.allocator.free(data);
 
-    const res = readData(std.testing.allocator, data);
-    try std.testing.expectError(error.DataAtomSizeTooLarge, res);
+    var metadata = try readData(std.testing.allocator, data);
+    defer metadata.deinit();
+
+    // the invalid atom should be skipped but the valid one should be read
+    try std.testing.expectEqual(@as(usize, 1), metadata.map.entries.items.len);
 }
 
 test "atom size too big" {

@@ -186,12 +186,16 @@ const buggy_files = buggy_files: {
         .{"go it alone - vancouver gold/Go it Alone - Statement.mp3"},
         .{"go it alone - vancouver gold/Go it Alone - The Best of You.mp3"},
         .{"go it alone - vancouver gold/Go it Alone - Turn It Off.mp3"},
+
+        // TagLib removes a NUL byte from the end of a \xA9cmt atom's data,
+        // but we preserve it (since string data is not NUL-terminated in MP4 files)
+        .{"Dystopia & Suffering Luna - Split/02 La Reina Del Rosario.m4a"},
     });
 };
 
 test "music folder" {
     const allocator = std.testing.allocator;
-    var dir = try std.fs.cwd().openDir("/media/drive4/music/", .{ .iterate = true });
+    var dir = try std.fs.cwd().openDir("/media/drive4/music", .{ .iterate = true });
     var walker = try dir.walk(allocator);
     defer walker.deinit();
 
@@ -517,6 +521,77 @@ fn compareFullText(expected: FullTextEntry, actual: FullTextEntry) !void {
     try testing.expectEqualStrings(expected.value, actual.value);
 }
 
+const taglibMP4Conversions = std.ComptimeStringMap([]const u8, .{
+    .{ "\xA9nam", "TITLE" },
+    .{ "\xA9ART", "ARTIST" },
+    .{ "\xA9alb", "ALBUM" },
+    .{ "\xA9cmt", "COMMENT" },
+    .{ "\xA9gen", "GENRE" },
+    .{ "\xA9day", "DATE" },
+    .{ "\xA9wrt", "COMPOSER" },
+    .{ "\xA9grp", "GROUPING" },
+    .{ "aART", "ALBUMARTIST" },
+    .{ "trkn", "TRACKNUMBER" },
+    .{ "disk", "DISCNUMBER" },
+    .{ "cpil", "COMPILATION" },
+    .{ "tmpo", "BPM" },
+    .{ "cprt", "COPYRIGHT" },
+    .{ "\xA9lyr", "LYRICS" },
+    .{ "\xA9too", "ENCODEDBY" },
+    .{ "soal", "ALBUMSORT" },
+    .{ "soaa", "ALBUMARTISTSORT" },
+    .{ "soar", "ARTISTSORT" },
+    .{ "sonm", "TITLESORT" },
+    .{ "soco", "COMPOSERSORT" },
+    .{ "sosn", "SHOWSORT" },
+    .{ "shwm", "SHOWWORKMOVEMENT" },
+    .{ "pgap", "GAPLESSPLAYBACK" },
+    .{ "pcst", "PODCAST" },
+    .{ "catg", "PODCASTCATEGORY" },
+    .{ "desc", "PODCASTDESC" },
+    .{ "egid", "PODCASTID" },
+    .{ "purl", "PODCASTURL" },
+    .{ "tves", "TVEPISODE" },
+    .{ "tven", "TVEPISODEID" },
+    .{ "tvnn", "TVNETWORK" },
+    .{ "tvsn", "TVSEASON" },
+    .{ "tvsh", "TVSHOW" },
+    .{ "\xA9wrk", "WORK" },
+    .{ "\xA9mvn", "MOVEMENTNAME" },
+    .{ "\xA9mvi", "MOVEMENTNUMBER" },
+    .{ "\xA9mvc", "MOVEMENTCOUNT" },
+    // TagLib converts gnre to \xA9gen while parsing, which then gets converted to GENRE
+    .{ "gnre", "GENRE" },
+});
+
+fn compareMetadataMapMP4(expected: *const MetadataMap, actual: *const MetadataMap) !void {
+    expected_loop: for (expected.entries.items) |field| {
+        var found_matching_key = false;
+        for (actual.entries.items) |entry| {
+            const converted_name = taglibMP4Conversions.get(entry.name);
+            if (converted_name == null) {
+                continue;
+            }
+            if (std.mem.eql(u8, field.name, converted_name.?)) {
+                if (std.mem.eql(u8, field.value, entry.value)) {
+                    continue :expected_loop;
+                }
+                found_matching_key = true;
+            }
+        }
+        std.debug.print("field: {s}\n", .{fmtUtf8SliceEscapeUpper(field.name)});
+        std.debug.print("\nexpected:\n", .{});
+        expected.dump();
+        std.debug.print("\nactual:\n", .{});
+        actual.dump();
+        if (found_matching_key) {
+            return error.FieldValuesDontMatch;
+        } else {
+            return error.MissingField;
+        }
+    }
+}
+
 fn compareMetadata(allocator: Allocator, all_expected: *AllMetadata, all_actual: *AllMetadata) !void {
     // dumb way to do this but oh well
     errdefer {
@@ -569,7 +644,7 @@ fn compareMetadata(allocator: Allocator, all_expected: *AllMetadata, all_actual:
                     return error.MissingMP4;
                 }
                 const actual_mp4 = maybe_actual_mp4.?;
-                try compareMetadataMap(&expected_tag.getMetadata().map, &actual_mp4.map);
+                try compareMetadataMapMP4(&expected_tag.getMetadata().map, &actual_mp4.map);
             },
             else => @panic("TODO: comparisons for more tag types supported by taglib"),
         }
