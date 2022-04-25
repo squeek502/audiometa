@@ -77,7 +77,7 @@ pub const AtomHeader = struct {
 
 /// Generic data atom
 ///
-/// See https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/Metadata/Metadata.html#//apple_ref/doc/uid/TP40000939-CH1-SW27
+/// See the iTunes Metadata Format Specification
 pub const DataAtom = struct {
     header: AtomHeader,
     indicators: Indicators,
@@ -108,59 +108,52 @@ pub const DataAtom = struct {
 
         pub const len = 8;
 
-        /// Returns the first byte of the "type indicator" field.
-        fn getType(self: Indicators) Type {
-            return @intToEnum(Type, (self.type_indicator & 0xFF000000) >> 24);
+        /// Returns the 'type set' identifier of the "type indicator" field.
+        fn getTypeSet(self: Indicators) TypeSet {
+            return @intToEnum(TypeSet, (self.type_indicator & 0x0000FF00) >> 8);
         }
 
-        pub const Type = enum(u8) {
-            well_known = 0,
-            // all non-zero type bytes are considered 'reserved'
+        pub const TypeSet = enum(u8) {
+            basic = 0,
+            // anything besides 0 is unknown
             _,
         };
 
-        /// Returns the well-known type of the value, or null if the type indicator is reserved instead of well-known.
+        /// Returns the basic type of the value, or null if the type set is unknown instead of basic.
         ///
-        /// See https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/Metadata/Metadata.html#//apple_ref/doc/uid/TP40000939-CH1-SW34
-        /// for a list of well-known types.
-        fn getWellKnownType(self: Indicators) ?WellKnownType {
-            switch (self.getType()) {
-                .well_known => {
-                    const well_known_type = @intCast(u24, self.type_indicator & 0x00FFFFFF);
-                    return @intToEnum(WellKnownType, well_known_type);
+        /// See the iTunes Metadata Format Specification
+        fn getBasicType(self: Indicators) ?BasicType {
+            switch (self.getTypeSet()) {
+                .basic => {
+                    const basic_type = @intCast(u8, self.type_indicator & 0x000000FF);
+                    return @intToEnum(BasicType, basic_type);
                 },
                 else => return null,
             }
         }
 
-        /// From https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/Metadata/Metadata.html#//apple_ref/doc/uid/TP40000939-CH1-SW34
-        pub const WellKnownType = enum(u24) {
-            reserved = 0,
+        /// From the iTunes Metadata Format Specification
+        pub const BasicType = enum(u8) {
+            implicit = 0,
             utf8 = 1,
             utf16_be = 2,
             s_jis = 3,
-            utf8_sort = 4,
-            utf16_sort = 5,
+            html = 6,
+            xml = 7,
+            uuid = 8,
+            isrc = 9, // as UTF-8
+            mi3p = 10, // as UTF-8
+            gif = 12,
             jpeg = 13,
             png = 14,
-            be_signed_integer = 21, // 1, 2, 3, or 4 bytes
-            be_unsigned_integer = 22, // 1, 2, 3, or 4 bytes
-            be_float32 = 23,
-            be_float64 = 24,
+            url = 15,
+            duration = 16, // milliseconds as a u32
+            date_time = 17, // in UTC, seconds since midnight 1 Jan 1904, 32 or 64 bits
+            genres = 18, // list of genre ids
+            be_signed_integer = 21, // 1, 2, 3, 4, or 8 bytes
+            riaa_pa = 24,
+            upc = 25, // as UTF-8
             bmp = 27,
-            atom = 28,
-            signed_byte = 65,
-            be_16bit_signed_integer = 66,
-            be_32bit_signed_integer = 67,
-            be_point_f32 = 70,
-            be_dimensions_f32 = 71,
-            be_rect_f32 = 72,
-            be_64bit_signed_integer = 74,
-            unsigned_byte = 75,
-            be_16bit_unsigned_integer = 76,
-            be_32bit_unsigned_integer = 77,
-            be_64bit_unsigned_integer = 78,
-            affine_transform_f64 = 79,
             _,
         };
     };
@@ -188,7 +181,7 @@ pub const DataAtom = struct {
 /// Reads a single `ilst` data atom and adds it to the metadata if it's valid
 pub fn readIlstData(allocator: Allocator, reader: anytype, seekable_stream: anytype, metadata: *Metadata, atom_header: AtomHeader, end_of_containing_atom: usize) !void {
     const data_atom = try DataAtom.read(reader, seekable_stream);
-    const maybe_well_known_type = data_atom.indicators.getWellKnownType();
+    const maybe_basic_type = data_atom.indicators.getBasicType();
 
     // We can do some extra verification here to avoid processing
     // invalid atoms by checking that the reported size of the data
@@ -198,8 +191,8 @@ pub fn readIlstData(allocator: Allocator, reader: anytype, seekable_stream: anyt
         return error.DataAtomSizeTooLarge;
     }
 
-    if (maybe_well_known_type) |well_known_type| {
-        switch (well_known_type) {
+    if (maybe_basic_type) |basic_type| {
+        switch (basic_type) {
             .utf8 => {
                 var value = try data_atom.readValueAsBytes(allocator, reader);
                 defer allocator.free(value);
@@ -234,41 +227,31 @@ pub fn readIlstData(allocator: Allocator, reader: anytype, seekable_stream: anyt
 
                 try metadata.map.put(&atom_header.name, value_utf8);
             },
-            .be_signed_integer, .be_unsigned_integer => {
+            .be_signed_integer => {
                 var size = data_atom.dataSize();
-                if (size == 0 or size > 4) {
+                if (size == 0 or size > 8) {
                     return error.InvalidDataAtom;
                 }
-                var value_buf: [4]u8 = undefined;
+                var value_buf: [8]u8 = undefined;
                 var value_bytes = value_buf[0..size];
                 try reader.readNoEof(value_bytes);
 
-                // TODO: There's probably a better way to do this
-                const value_int: i64 = switch (well_known_type) {
-                    .be_unsigned_integer => switch (size) {
-                        1 => std.mem.readIntSliceBig(u8, value_bytes),
-                        2 => std.mem.readIntSliceBig(u16, value_bytes),
-                        3 => std.mem.readIntSliceBig(u24, value_bytes),
-                        4 => std.mem.readIntSliceBig(u32, value_bytes),
-                        else => unreachable,
-                    },
-                    .be_signed_integer => switch (size) {
-                        1 => std.mem.readIntSliceBig(i8, value_bytes),
-                        2 => std.mem.readIntSliceBig(i16, value_bytes),
-                        3 => std.mem.readIntSliceBig(i24, value_bytes),
-                        4 => std.mem.readIntSliceBig(i32, value_bytes),
-                        else => unreachable,
-                    },
+                const value_int: i64 = switch (size) {
+                    1 => std.mem.readIntSliceBig(i8, value_bytes),
+                    2 => std.mem.readIntSliceBig(i16, value_bytes),
+                    3 => std.mem.readIntSliceBig(i24, value_bytes),
+                    4 => std.mem.readIntSliceBig(i32, value_bytes),
+                    8 => std.mem.readIntSliceBig(i64, value_bytes),
                     else => unreachable,
                 };
 
-                const longest_possible_string = "-2147483648";
+                const longest_possible_string = "-9223372036854775808";
                 var int_string_buf: [longest_possible_string.len]u8 = undefined;
                 const value_utf8 = std.fmt.bufPrintIntToSlice(&int_string_buf, value_int, 10, .lower, .{});
 
                 try metadata.map.put(&atom_header.name, value_utf8);
             },
-            .reserved => {
+            .implicit => {
                 // these atoms have two 16-bit integer values
                 if (std.mem.eql(u8, "trkn", &atom_header.name) or std.mem.eql(u8, "disk", &atom_header.name)) {
                     if (data_atom.dataSize() < 4) {
@@ -322,7 +305,7 @@ pub fn readIlstData(allocator: Allocator, reader: anytype, seekable_stream: anyt
                         try metadata.map.put(&atom_header.name, genre_name);
                     }
                 } else {
-                    // any other reserved type is unknown, though
+                    // any other implicit type is unknown, though
                     try data_atom.skipValue(seekable_stream);
                 }
             },
