@@ -4,6 +4,28 @@ An audio metadata/tag reading library written in [Zig](https://ziglang.org/). Cu
 
 **still heavily work-in-progress, everything is subject to change**
 
+The general idea is to:
+
+1. Parse all metadata verbatim, with no de-duplication, and as little interpretation as possible. *(this part is mostly working/complete)*
+2. Run the metadata through a 'collater' that does some (potentially subjective) interpretation of the metadata and provides the 'best' set of metadata (doing things like de-duplication, prioritization between different types of metadata, conversion from inferred character encodings, etc). *(this part is unfinished)*
+
+In terms of code, usage will probably look something like:
+
+```zig
+var stream_source = std.io.StreamSource{ .file = file };
+
+// Step 1: Parse the metadata
+var metadata = try audiometa.metadata.readAll(allocator, &stream_source);
+defer metadata.deinit();
+
+// Step 2: Collate the metadata
+var collator = audiometa.collate.Collator.init(allocator, &metadata);
+defer collator.deinit();
+
+// Get the parts of the collated data you care about and do what you want with it
+const artists = try collator.artists();
+```
+
 ## Limitations
 
 - No compression support, all compressed tags/frames are ignored (haven't ever seen one of these in the wild)
