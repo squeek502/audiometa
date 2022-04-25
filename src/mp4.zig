@@ -558,6 +558,15 @@ test "extended size" {
     try std.testing.expectEqual(@as(usize, 1), metadata.map.entries.items.len);
 }
 
+test "extended size smaller than extended header len" {
+    // extended size is set as 0x09, which is larger than AtomHeader.len but smaller
+    // than the size of the header with the extended size included, so it
+    // should be rejected as too small
+    const data = "\x00\x00\x00\x01ftyp\x00\x00\x00\x00\x00\x00\x00\x09";
+    const res = readData(std.testing.allocator, data);
+    try std.testing.expectError(error.AtomSizeTooSmall, res);
+}
+
 const ftyp_test_data = "\x00\x00\x00\x08ftyp";
 
 fn writeTestData(allocator: Allocator, metadata_payload: []const u8) ![]u8 {
