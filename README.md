@@ -7,7 +7,7 @@ An audio metadata/tag reading library written in [Zig](https://ziglang.org/). Cu
 The general idea is to:
 
 1. Parse all metadata verbatim, with no de-duplication, and as little interpretation as possible. *(this part is mostly working/complete)*
-2. Run the metadata through a 'collater' that does some (potentially subjective) interpretation of the metadata and provides the 'best' set of metadata (doing things like de-duplication, prioritization between different types of metadata, conversion from inferred character encodings, etc). *(this part is unfinished)*
+2. Run the metadata through a 'collator' that does some (potentially subjective) interpretation of the metadata, and then provides only the 'best' set of metadata (doing things like de-duplication, prioritization between different types of metadata, conversion from inferred character encodings, etc). *(this part is unfinished)*
 
 In terms of code, usage will probably look something like:
 
