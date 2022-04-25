@@ -224,8 +224,8 @@ pub fn readIlstData(allocator: Allocator, reader: anytype, seekable_stream: anyt
             },
             .be_signed_integer, .be_unsigned_integer => {
                 var size = data_atom.dataSize();
-                if (size > 4) {
-                    return error.DataAtomSizeTooLarge;
+                if (size == 0 or size > 4) {
+                    return error.InvalidDataAtom;
                 }
                 var value_buf: [4]u8 = undefined;
                 var value_bytes = value_buf[0..size];
