@@ -197,6 +197,10 @@ pub fn readIlstData(allocator: Allocator, reader: anytype, seekable_stream: anyt
             // TODO: Verify that the UTF-16 case works correctly--I didn't have any
             //       files with UTF-16 data atoms.
             .utf16_be => {
+                // data size must be divisible by 2
+                if (data_atom.dataSize() % 2 != 0) {
+                    return error.InvalidUTF16Data;
+                }
                 var value_bytes = try allocator.alignedAlloc(u8, @alignOf(u16), data_atom.dataSize());
                 defer allocator.free(value_bytes);
 
@@ -214,6 +218,8 @@ pub fn readIlstData(allocator: Allocator, reader: anytype, seekable_stream: anyt
                     error.OutOfMemory => return error.OutOfMemory,
                     else => return error.InvalidUTF16Data,
                 };
+                defer allocator.free(value_utf8);
+
                 try metadata.map.put(&atom_header.name, value_utf8);
             },
             .be_signed_integer, .be_unsigned_integer => {
