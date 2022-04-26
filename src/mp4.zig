@@ -83,23 +83,26 @@ pub const DataAtom = struct {
     indicators: Indicators,
 
     pub fn read(reader: anytype, seekable_stream: anytype) !DataAtom {
-        var data_atom: DataAtom = undefined;
+        const header = try AtomHeader.read(reader, seekable_stream);
+        return readIndicatorsGivenHeader(header, reader);
+    }
 
-        data_atom.header = try AtomHeader.read(reader, seekable_stream);
-        if (!std.mem.eql(u8, "data", &data_atom.header.name)) {
+    pub fn readIndicatorsGivenHeader(header: AtomHeader, reader: anytype) !DataAtom {
+        if (!std.mem.eql(u8, "data", &header.name)) {
             return error.InvalidDataAtom;
         }
 
-        if (data_atom.header.sizeExcludingHeader() < Indicators.len) {
+        if (header.sizeExcludingHeader() < Indicators.len) {
             return error.DataAtomSizeTooSmall;
         }
 
-        data_atom.indicators = Indicators{
-            .type_indicator = try reader.readIntBig(u32),
-            .locale_indicator = try reader.readIntBig(u32),
+        return DataAtom{
+            .header = header,
+            .indicators = Indicators{
+                .type_indicator = try reader.readIntBig(u32),
+                .locale_indicator = try reader.readIntBig(u32),
+            },
         };
-
-        return data_atom;
     }
 
     pub const Indicators = struct {
@@ -178,9 +181,78 @@ pub const DataAtom = struct {
     }
 };
 
-/// Reads a single `ilst` data atom and adds it to the metadata if it's valid
-pub fn readIlstData(allocator: Allocator, reader: anytype, seekable_stream: anytype, metadata: *Metadata, atom_header: AtomHeader, end_of_containing_atom: usize) !void {
-    const data_atom = try DataAtom.read(reader, seekable_stream);
+/// Reads a single metadata item within an `ilst` and adds its value(s) to the metadata if it's valid
+pub fn readMetadataItem(allocator: Allocator, reader: anytype, seekable_stream: anytype, metadata: *Metadata, atom_header: AtomHeader, end_of_containing_atom: usize) !void {
+    // used as the name when the metadata item is of type ----
+    var full_meaning_name: ?[]u8 = null;
+    defer if (full_meaning_name != null) allocator.free(full_meaning_name.?);
+
+    const maybe_unhandled_header: ?AtomHeader = unhandled_header: {
+        // ---- is a special metadata item that has a 'mean' and an optional 'name' atom
+        // that describe the meaning as a string
+        if (std.mem.eql(u8, "----", &atom_header.name)) {
+            var meaning_string = meaning_string: {
+                const mean_header = try AtomHeader.read(reader, seekable_stream);
+                if (!std.mem.eql(u8, "mean", &mean_header.name)) {
+                    return error.InvalidDataAtom;
+                }
+                if (mean_header.sizeExcludingHeader() < FullAtomHeader.len) {
+                    return error.InvalidDataAtom;
+                }
+                // mean atoms are FullAtoms, so read the extra bits
+                _ = try FullAtomHeader.read(reader);
+
+                const data_size = mean_header.sizeExcludingHeader() - FullAtomHeader.len;
+                var meaning_string = try allocator.alloc(u8, data_size);
+                errdefer allocator.free(meaning_string);
+
+                try reader.readNoEof(meaning_string);
+                break :meaning_string meaning_string;
+            };
+            var should_free_meaning_string = true;
+            defer if (should_free_meaning_string) allocator.free(meaning_string);
+
+            var name_string = name_string: {
+                const name_header = try AtomHeader.read(reader, seekable_stream);
+                if (!std.mem.eql(u8, "name", &name_header.name)) {
+                    // name is optional, so bail out and try reading the rest as a DataAtom
+                    // we also want to save the meaning string for after the break
+                    full_meaning_name = meaning_string;
+                    // so we also need to stop it from getting freed in the defer
+                    should_free_meaning_string = false;
+                    break :unhandled_header name_header;
+                }
+                if (name_header.sizeExcludingHeader() < FullAtomHeader.len) {
+                    return error.InvalidDataAtom;
+                }
+                // name atoms are FullAtoms, so read the extra bits
+                _ = try FullAtomHeader.read(reader);
+
+                const data_size = name_header.sizeExcludingHeader() - FullAtomHeader.len;
+                var name_string = try allocator.alloc(u8, data_size);
+                errdefer allocator.free(name_string);
+
+                try reader.readNoEof(name_string);
+                break :name_string name_string;
+            };
+            defer allocator.free(name_string);
+
+            // to get the full meaning string, the name is appended to the meaning with a '.' separator
+            full_meaning_name = try std.mem.join(allocator, ".", &.{ meaning_string, name_string });
+            break :unhandled_header null;
+        } else {
+            break :unhandled_header null;
+        }
+    };
+
+    // If this is a ---- item, use the full meaning name, otherwise use the metadata item atom's name
+    // TODO: Potentially store the two different ways of naming things
+    //       in separate maps, like ID3v2.user_defined
+    const metadata_item_name: []const u8 = full_meaning_name orelse &atom_header.name;
+    const data_atom = if (maybe_unhandled_header) |unhandled_header|
+        try DataAtom.readIndicatorsGivenHeader(unhandled_header, reader)
+    else
+        try DataAtom.read(reader, seekable_stream);
     const maybe_basic_type = data_atom.indicators.getBasicType();
 
     // We can do some extra verification here to avoid processing
@@ -197,7 +269,7 @@ pub fn readIlstData(allocator: Allocator, reader: anytype, seekable_stream: anyt
                 var value = try data_atom.readValueAsBytes(allocator, reader);
                 defer allocator.free(value);
 
-                try metadata.map.put(&atom_header.name, value);
+                try metadata.map.put(metadata_item_name, value);
             },
             // TODO: Verify that the UTF-16 case works correctly--I didn't have any
             //       files with UTF-16 data atoms.
@@ -225,7 +297,7 @@ pub fn readIlstData(allocator: Allocator, reader: anytype, seekable_stream: anyt
                 };
                 defer allocator.free(value_utf8);
 
-                try metadata.map.put(&atom_header.name, value_utf8);
+                try metadata.map.put(metadata_item_name, value_utf8);
             },
             .be_signed_integer => {
                 var size = data_atom.dataSize();
@@ -249,7 +321,7 @@ pub fn readIlstData(allocator: Allocator, reader: anytype, seekable_stream: anyt
                 var int_string_buf: [longest_possible_string.len]u8 = undefined;
                 const value_utf8 = std.fmt.bufPrintIntToSlice(&int_string_buf, value_int, 10, .lower, .{});
 
-                try metadata.map.put(&atom_header.name, value_utf8);
+                try metadata.map.put(metadata_item_name, value_utf8);
             },
             .implicit => {
                 // these atoms have two 16-bit integer values
@@ -285,7 +357,7 @@ pub fn readIlstData(allocator: Allocator, reader: anytype, seekable_stream: anyt
                         utf8_writer.print("{}", .{current}) catch unreachable;
                     }
 
-                    try metadata.map.put(&atom_header.name, utf8_fbs.getWritten());
+                    try metadata.map.put(metadata_item_name, utf8_fbs.getWritten());
                 } else if (std.mem.eql(u8, "gnre", &atom_header.name)) {
                     if (data_atom.dataSize() != 2) {
                         return error.InvalidDataAtom;
@@ -302,7 +374,7 @@ pub fn readIlstData(allocator: Allocator, reader: anytype, seekable_stream: anyt
                     if (genre_id_plus_one > 0 and genre_id_plus_one <= id3v1.id3v1_genre_names.len) {
                         const genre_id = genre_id_plus_one - 1;
                         const genre_name = id3v1.id3v1_genre_names[genre_id];
-                        try metadata.map.put(&atom_header.name, genre_name);
+                        try metadata.map.put(metadata_item_name, genre_name);
                     }
                 } else {
                     // any other implicit type is unknown, though
@@ -425,7 +497,7 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
                 continue;
             },
             .in_ilst => {
-                readIlstData(allocator, reader, seekable_stream, &metadata, atom_header, end_of_current_atom) catch |err| switch (err) {
+                readMetadataItem(allocator, reader, seekable_stream, &metadata, atom_header, end_of_current_atom) catch |err| switch (err) {
                     // Some errors within the ilst can be recovered from by skipping the invalid atom
                     error.DataAtomSizeTooLarge,
                     error.DataAtomSizeTooSmall,
