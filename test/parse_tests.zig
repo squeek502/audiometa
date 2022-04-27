@@ -31,7 +31,7 @@ fn parseExpectedMetadata(comptime path: []const u8, expected_meta: ExpectedAllMe
     const data = @embedFile(path);
     var stream_source = std.io.StreamSource{ .const_buffer = std.io.fixedBufferStream(data) };
     if (induce_allocation_failures) {
-        return audiometa.util.checkAllAllocationFailures(testing.allocator, parseExpectedMetadataImpl, .{ &stream_source, expected_meta });
+        return testing.checkAllAllocationFailures(testing.allocator, parseExpectedMetadataImpl, .{ &stream_source, expected_meta });
     } else {
         return parseExpectedMetadataImpl(testing.allocator, &stream_source, expected_meta);
     }
