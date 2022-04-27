@@ -969,3 +969,26 @@ test "mp4" {
         } },
     } });
 }
+
+test "m4a with ----" {
+    try parseExpectedMetadata("data/m4a_with_----.m4a", .{ .tags = &.{
+        .{ .mp4 = .{
+            .start_offset = 0x18,
+            .end_offset = 0xab3,
+            .map = &[_]MetadataEntry{
+                .{ .name = "\xA9ART", .value = "Momentum" },
+                .{ .name = "\xA9alb", .value = "Herbivore" },
+                .{ .name = "\xA9day", .value = "2012" },
+                .{ .name = "\xA9gen", .value = "Hardcore Punk" },
+                .{ .name = "\xA9nam", .value = "Barbarity" },
+                .{ .name = "\xA9too", .value = "iTunes 11.0" },
+                .{ .name = "trkn", .value = "1/8" },
+                .{ .name = "cpil", .value = "0" },
+                .{ .name = "pgap", .value = "0" },
+                .{ .name = "tmpo", .value = "0" },
+                .{ .name = "com.apple.iTunes.iTunSMPB", .value = " 00000000 00000840 00000134 00000000003CFA8C 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000" },
+                .{ .name = "com.apple.iTunes.iTunNORM", .value = " 00004FAE 00004D7E 0001ECE0 0001267D 00015D4C 000111BD 00007BB3 00007BAD 00015C63 00007C71" },
+            },
+        } },
+    } });
+}
