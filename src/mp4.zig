@@ -538,9 +538,38 @@ fn seekByExtended(seekable_stream: anytype, amount: u64) !void {
     if (std.math.cast(u32, amount)) |seek_amount| {
         try seekable_stream.seekBy(seek_amount);
     } else |_| {
-        try seekable_stream.seekBy(@intCast(u32, amount & 0xFFFFFFFF));
-        try seekable_stream.seekBy(@intCast(u32, amount >> 32));
+        var remaining = amount;
+        while (remaining > 0) {
+            const seek_amt = std.math.min(remaining, std.math.maxInt(u32));
+            try seekable_stream.seekBy(@intCast(u32, seek_amt));
+            remaining -= seek_amt;
+        }
     }
+}
+
+test "seekByExtended" {
+    const TestStream = struct {
+        pos: u64,
+
+        const Self = @This();
+
+        // dummy partial-implementation of a seekable stream
+        // that assumes all seekBy calls use positives `amt`s
+        pub const SeekableStream = struct {
+            ctx: *Self,
+
+            pub fn seekBy(self: @This(), amt: i64) !void {
+                self.ctx.pos += @intCast(u32, amt);
+            }
+        };
+    };
+    var test_stream = TestStream{ .pos = 0 };
+    const test_seekable_stream = TestStream.SeekableStream{ .ctx = &test_stream };
+
+    const large_seek_amt: u64 = 1 << 32;
+    try seekByExtended(test_seekable_stream, large_seek_amt);
+
+    try std.testing.expectEqual(large_seek_amt, test_stream.pos);
 }
 
 test "atom size too small" {
