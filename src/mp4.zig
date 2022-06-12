@@ -310,8 +310,9 @@ pub fn readMetadataItem(allocator: Allocator, reader: anytype, seekable_stream: 
                 },
                 .be_signed_integer => {
                     var size = data_atom.dataSize();
-                    if (size == 0 or size > 8) {
-                        return error.InvalidDataAtom;
+                    switch (size) {
+                        1...4, 8 => {},
+                        else => return error.InvalidDataAtom,
                     }
                     var value_buf: [8]u8 = undefined;
                     var value_bytes = value_buf[0..size];
