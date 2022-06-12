@@ -615,7 +615,7 @@ const AtomReadState = enum {
     in_ilst,
 };
 
-/// Reads one full atom tree and returns a slice of any metadata found within it.
+/// Reads one full atom tree and appends any metadata found within it to `all_metadata`.
 pub fn readFullAtomIntoArrayList(allocator: Allocator, _reader: anytype, _seekable_stream: anytype, all_metadata: *std.ArrayList(Metadata)) !void {
     // For our purposes of extracting the audio metadata we assume that the metadata
     // we care about will be found in the following structure:
@@ -991,7 +991,8 @@ test "skip invalid leafs by skipping the invalid leaf's parent entirely" {
     // The idea here is that we need to deal with `chl1` having an incorrectly encoded size.
     // However, because we can't be sure that `chl2` is actually directly after `chl1` in memory, we
     // can't determine where we should start trying to read its header. Instead, we
-    // need to skip to the end of its parent (`udta`) and try reading the next atom (`sibl`) as normal.
+    // need to skip to the end of its parent (`udta`) and try reading the next atom (another `udta`)
+    // as normal.
     //
     // zig fmt: off
     const test_data =
