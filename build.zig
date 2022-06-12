@@ -34,6 +34,9 @@ pub fn build(b: *std.build.Builder) void {
     tests.setTarget(target);
     tests.setFilter(test_filter);
 
+    const test_lib_step = b.step("test-lib", "Run all library tests (without parse tests)");
+    test_lib_step.dependOn(&tests.step);
+
     var parse_tests = b.addTest("test/parse_tests.zig");
     parse_tests.setBuildMode(mode);
     parse_tests.setTarget(target);
