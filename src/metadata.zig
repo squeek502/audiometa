@@ -103,14 +103,24 @@ pub fn readAll(allocator: Allocator, stream_source: *std.io.StreamSource) !AllMe
         }
 
         try seekable_stream.seekTo(initial_pos);
-        var mp4_metadata: ?Metadata = mp4.read(allocator, reader, seekable_stream) catch |e| switch (e) {
+        var all_mp4_metadata: []Metadata = mp4.readAll(allocator, reader, seekable_stream) catch |e| switch (e) {
             error.OutOfMemory => |err| return err,
-            else => null,
+            else => &[_]Metadata{},
         };
-        if (mp4_metadata != null) {
+        var mp4_metadata_cleanup_index: usize = 0;
+        defer {
+            var index = mp4_metadata_cleanup_index;
+            while (index < all_mp4_metadata.len) : (index += 1) {
+                all_mp4_metadata[index].deinit();
+            }
+            allocator.free(all_mp4_metadata);
+        }
+        if (all_mp4_metadata.len != 0) {
             {
-                errdefer mp4_metadata.?.deinit();
-                try all_metadata.append(TypedMetadata{ .mp4 = mp4_metadata.? });
+                for (all_mp4_metadata) |mp4_metadata| {
+                    try all_metadata.append(TypedMetadata{ .mp4 = mp4_metadata });
+                    mp4_metadata_cleanup_index += 1;
+                }
             }
             continue;
         }

@@ -992,3 +992,40 @@ test "m4a with ----" {
         } },
     } });
 }
+
+test "mp4 with multiple moovs" {
+    try parseExpectedMetadata("data/mp4_with_multiple_moovs.mp4", .{ .tags = &.{
+        .{ .mp4 = .{
+            .start_offset = 0x18,
+            .end_offset = 0x44d,
+            .map = &[_]MetadataEntry{
+                .{ .name = "aART", .value = "Test album artist" },
+                .{ .name = "\xA9ART", .value = "Test artist" },
+                .{ .name = "\xA9alb", .value = "Test album" },
+                .{ .name = "\xA9cmt", .value = "no comment" },
+                .{ .name = "\xA9day", .value = "2022" },
+                .{ .name = "\xA9gen", .value = "Metal" },
+                .{ .name = "\xA9nam", .value = "Test title" },
+                .{ .name = "\xA9too", .value = "Lavf58.76.100" },
+                .{ .name = "\xA9wrt", .value = "Test composer" },
+                .{ .name = "cprt", .value = "Test copyright" },
+            },
+        } },
+        .{ .mp4 = .{
+            .start_offset = 0x45d,
+            .end_offset = 0x892,
+            .map = &[_]MetadataEntry{
+                .{ .name = "aART", .value = "Test album artist" },
+                .{ .name = "\xA9ART", .value = "Test artist" },
+                .{ .name = "\xA9alb", .value = "Test album" },
+                .{ .name = "\xA9cmt", .value = "no comment" },
+                .{ .name = "\xA9day", .value = "2022" },
+                .{ .name = "\xA9gen", .value = "Metal" },
+                .{ .name = "\xA9nam", .value = "Test title" },
+                .{ .name = "\xA9too", .value = "Lavf58.76.100" },
+                .{ .name = "\xA9wrt", .value = "Test composer" },
+                .{ .name = "cprt", .value = "Test copyright" },
+            },
+        } },
+    } });
+}

@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Metadata = @import("metadata.zig").Metadata;
 const id3v1 = @import("id3v1.zig"); // needed for genre ID lookup for gnre atom
+const constrainedStream = @import("constrained_stream.zig").constrainedStream;
 
 // Some atoms can be "full atoms", meaning they have an additional 4 bytes
 // for a version and some flags.
@@ -59,7 +60,7 @@ pub const AtomHeader = struct {
 
         const remaining = (try seekable_stream.getEndPos()) - (try seekable_stream.getPos());
         if (header.sizeExcludingHeader() > remaining) {
-            return error.EndOfStream;
+            return error.AtomSizeTooLarge;
         }
 
         return header;
@@ -399,39 +400,225 @@ pub fn readMetadataItem(allocator: Allocator, reader: anytype, seekable_stream: 
     }
 }
 
-/// Reads the metadata from an MP4 file.
-///
-/// MP4 is defined in ISO/IEC 14496-14 but MP4 files are essentially identical to QuickTime container files.
-/// See https://wiki.multimedia.cx/index.php/QuickTime_container for information.
-///
-/// This function does just enough to extract the metadata relevant to an audio file
-pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Metadata {
-    var metadata: Metadata = Metadata.init(allocator);
-    errdefer metadata.deinit();
+pub const AtomTreeIterator = struct {
+    atom_stack: std.ArrayList(AtomInfo),
 
-    // A MP4 file is a tree of atoms. An "atom" is the building block of a MP4 container.
-    //
-    // First, we verify that the first atom is an `ftyp` atom in order to check that
-    // we are actually reading a MP4 file. This is technically optional according to
-    // https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/QTFFChap1/qtff1.html#//apple_ref/doc/uid/TP40000939-CH203-CJBCBIFF
-    // but 'strongly recommendeded.'
-    //
-    // This verification is done so that we can short-circuit out of non-MP4 files quickly, instead
-    // of skipping around the file randomly due to happens-to-be-valid-enough data.
+    pub const AtomInfo = struct {
+        header: AtomHeader,
+        end_pos: usize,
+    };
 
-    var first_atom_header = try AtomHeader.read(reader, seekable_stream);
-    if (!std.mem.eql(u8, "ftyp", &first_atom_header.name)) {
+    const Self = @This();
+
+    pub fn init(allocator: Allocator) Self {
+        return AtomTreeIterator{
+            .atom_stack = std.ArrayList(AtomInfo).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.atom_stack.deinit();
+    }
+
+    /// Reads an atom header and returns its header + end position, while keeping track
+    /// of the current stack of atoms. The caller should either skip to the end of the
+    /// returned atom or otherwise set up the iterator for the next read. For example, if
+    /// this function returns a `moov` atom and we're interested in reading the children
+    /// of the `moov` atom, we would do nothing and call `next` immediately. However, if
+    /// it was a `meta` atom then we'd need to read the FullAtom header before calling
+    /// next in order to read its children. If we were not interested in the entire tree
+    /// of the returned atom, then we'd skip to the returned `end_pos`.
+    ///
+    /// Returns `null` once the entire tree of the first-read-atom has been read.
+    pub fn next(self: *Self, reader: anytype, seekable_stream: anytype) !?AtomInfo {
+        const start_pos = try seekable_stream.getPos();
+        if (self.atom_stack.items.len > 0) {
+            // pop off any parent atoms that end at the same spot
+            while (self.atom_stack.items.len > 0 and
+                start_pos >= self.atom_stack.items[self.atom_stack.items.len - 1].end_pos)
+            {
+                _ = self.atom_stack.pop();
+            }
+            // if we popped everything off the stack, then we've read the entire tree
+            if (self.atom_stack.items.len == 0) {
+                return null;
+            }
+        }
+
+        const atom_header = try AtomHeader.read(reader, seekable_stream);
+
+        const atom_info = AtomInfo{
+            .header = atom_header,
+            .end_pos = start_pos + atom_header.size,
+        };
+        try self.atom_stack.append(atom_info);
+        return atom_info;
+    }
+
+    pub fn peekRemainingAtomAtPos(self: Self, cur_pos: usize) ?AtomInfo {
+        if (self.atom_stack.items.len == 0) return null;
+        var index: usize = self.atom_stack.items.len - 1;
+        while (true) {
+            if (cur_pos < self.atom_stack.items[index].end_pos) {
+                return self.atom_stack.items[index];
+            }
+            if (index == 0) {
+                return null;
+            }
+            index -= 1;
+        }
+        unreachable;
+    }
+
+    const StateUpdateInfo = struct {
+        end_pos: ?usize,
+        state: AtomReadState,
+    };
+
+    // TODO: This is very tied to the implementation details of readAll which doesn't seem great
+    pub fn stateFromRemainingAtom(maybe_remaining_atom: ?AtomInfo) StateUpdateInfo {
+        if (maybe_remaining_atom) |remaining_atom| {
+            if (std.mem.eql(u8, "meta", &remaining_atom.header.name)) {
+                return .{ .state = .in_meta, .end_pos = remaining_atom.end_pos };
+            } else if (std.mem.eql(u8, "udta", &remaining_atom.header.name)) {
+                return .{ .state = .in_udta, .end_pos = remaining_atom.end_pos };
+            } else if (std.mem.eql(u8, "moov", &remaining_atom.header.name)) {
+                return .{ .state = .in_moov, .end_pos = remaining_atom.end_pos };
+            }
+        }
+        return .{ .state = .start, .end_pos = null };
+    }
+};
+
+test "AtomTreeIterator single atom" {
+    const test_data = "\x00\x00\x00\x08moov";
+    var stream_source = std.io.StreamSource{ .const_buffer = std.io.fixedBufferStream(test_data) };
+    var atom_it = AtomTreeIterator.init(std.testing.allocator);
+    defer atom_it.deinit();
+
+    const reader = stream_source.reader();
+    const seekable_stream = stream_source.seekableStream();
+
+    // first atom should be the moov atom
+    const first_atom = try atom_it.next(reader, seekable_stream);
+    try std.testing.expectEqualStrings("moov", &first_atom.?.header.name);
+
+    // second atom should be null
+    const second_atom = try atom_it.next(reader, seekable_stream);
+    try std.testing.expect(second_atom == null);
+}
+
+test "AtomTreeIterator multiple top-level atoms" {
+    const test_data = "\x00\x00\x00\x08moov\x00\x00\x00\x08moov";
+    var stream_source = std.io.StreamSource{ .const_buffer = std.io.fixedBufferStream(test_data) };
+    var atom_it = AtomTreeIterator.init(std.testing.allocator);
+    defer atom_it.deinit();
+
+    const reader = stream_source.reader();
+    const seekable_stream = stream_source.seekableStream();
+
+    var tree_num: usize = 0;
+    while (tree_num < 2) : (tree_num += 1) {
+        // first atom should be the moov atom
+        const first_atom = try atom_it.next(reader, seekable_stream);
+        try std.testing.expectEqualStrings("moov", &first_atom.?.header.name);
+
+        // second atom should be null
+        const second_atom = try atom_it.next(reader, seekable_stream);
+        try std.testing.expect(second_atom == null);
+    }
+}
+
+test "AtomTreeIterator reading a subtree fully but not the outer tree" {
+    // zig fmt: off
+    const test_data =
+        "\x00\x00\x00\x20moov" ++
+          "\x00\x00\x00\x10dum1" ++
+            "\x00\x00\x00\x08dum2" ++
+          "\x00\x00\x00\x08dum3"
+    ;
+    // zig fmt: on
+    var stream_source = std.io.StreamSource{ .const_buffer = std.io.fixedBufferStream(test_data) };
+    var atom_it = AtomTreeIterator.init(std.testing.allocator);
+    defer atom_it.deinit();
+
+    const reader = stream_source.reader();
+    const seekable_stream = stream_source.seekableStream();
+
+    const first_atom = try atom_it.next(reader, seekable_stream);
+    try std.testing.expectEqualStrings("moov", &first_atom.?.header.name);
+
+    {
+        const remaining_atom = atom_it.peekRemainingAtomAtPos(try seekable_stream.getPos());
+        try std.testing.expectEqualStrings("moov", &remaining_atom.?.header.name);
+    }
+
+    const second_atom = try atom_it.next(reader, seekable_stream);
+    try std.testing.expectEqualStrings("dum1", &second_atom.?.header.name);
+
+    {
+        const remaining_atom = atom_it.peekRemainingAtomAtPos(try seekable_stream.getPos());
+        try std.testing.expectEqualStrings("dum1", &remaining_atom.?.header.name);
+    }
+
+    const third_atom = try atom_it.next(reader, seekable_stream);
+    try std.testing.expectEqualStrings("dum2", &third_atom.?.header.name);
+
+    // we've now read the dum1, and dum2 trees fully, but the moov tree
+    // still has a dum3 atom that hasn't been read
+    {
+        const remaining_atom = atom_it.peekRemainingAtomAtPos(try seekable_stream.getPos());
+        try std.testing.expectEqualStrings("moov", &remaining_atom.?.header.name);
+    }
+
+    const fourth_atom = try atom_it.next(reader, seekable_stream);
+    try std.testing.expectEqualStrings("dum3", &fourth_atom.?.header.name);
+
+    // now we've read the full thing, so there's no remaining atoms left
+    {
+        const remaining_atom = atom_it.peekRemainingAtomAtPos(try seekable_stream.getPos());
+        try std.testing.expect(remaining_atom == null);
+    }
+
+    const fifth_atom = try atom_it.next(reader, seekable_stream);
+    try std.testing.expect(fifth_atom == null);
+}
+
+/// This function can be used to read an atom and verify that it is an `ftyp` atom
+/// in order to check that we are actually reading a MP4 file. The `ftyp` atom
+/// should be the first atom in an mp4 file.
+///
+/// If the atom read is not an `ftyp` atom, this function returns `error.MissingFileTypeCompatibilityAtom`.
+///
+/// This `ftyp` atom is technically optional according to
+/// https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/QTFFChap1/qtff1.html#//apple_ref/doc/uid/TP40000939-CH203-CJBCBIFF
+/// but 'strongly recommendeded.'
+///
+/// This verification can be done in order to short-circuit out of non-MP4 files quickly, instead
+/// of skipping around the file randomly given happens-to-be-valid-enough data.
+pub fn readFtyp(reader: anytype, seekable_stream: anytype) !void {
+    var atom_header = try AtomHeader.read(reader, seekable_stream);
+    if (!std.mem.eql(u8, "ftyp", &atom_header.name)) {
         return error.MissingFileTypeCompatibilityAtom;
     }
     // We don't actually care too much about the contents of the `ftyp` atom, so just skip them
     // TODO: Should we care about the contents?
-    try seekByExtended(seekable_stream, first_atom_header.sizeExcludingHeader());
+    try seekByExtended(seekable_stream, atom_header.sizeExcludingHeader());
+}
 
-    // For our purposes of extracting the audio metadata we assume that the MP4 file
-    // respects the following layout which seem to be standard:
+const AtomReadState = enum {
+    start,
+    in_moov,
+    in_udta,
+    in_meta,
+    in_ilst,
+};
+
+/// Reads one full atom tree and returns a slice of any metadata found within it.
+pub fn readFullAtomIntoArrayList(allocator: Allocator, _reader: anytype, _seekable_stream: anytype, all_metadata: *std.ArrayList(Metadata)) !void {
+    // For our purposes of extracting the audio metadata we assume that the metadata
+    // we care about will be found in the following structure:
     //
-    // ftyp
-    // [...] (potentially other top-level atoms)
     // moov
     //   udta
     //     meta
@@ -440,97 +627,184 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
     //         \xA9alb
     //         \xA9ART
     //         ...
-    // [...] (potentially other top-level atoms)
     //
     // The data that interests us are the atoms under the "ilst" atom.
     //
-    // We skip all top-level atoms completely until we find a `moov` atom, and
-    // then drill down to the metadata we care about, still skipping anything we
-    // don't care about.
+    // If we're reading a `moov` atom, then we drill down to the metadata
+    // we care about, while skipping anything we don't care about.
 
-    var state: enum {
-        start,
-        in_moov,
-        in_udta,
-        in_meta,
-        in_ilst,
-    } = .start;
-
-    // Keep track of the end position of the atom we are currently 'inside'
-    // so that we can treat that as the end position of any data we try to read,
-    // since the size of atoms include the size of all of their children, too.
-    var end_of_current_atom: usize = try seekable_stream.getEndPos();
+    var state: AtomReadState = .start;
     var end_of_ilst: usize = 0;
 
-    while (true) {
-        var start_pos = try seekable_stream.getPos();
-        const atom_header = AtomHeader.read(reader, seekable_stream) catch |err| {
-            // Because of the nature of the mp4 format, we can't really detect when
-            // all of the atoms are 'done', and instead will always get some type of error
-            // when reading the next header (EndOfStream or an invalid header).
-            // So, if we have already read some metadata, then we treat it as a successful read
-            // and return that metadata.
-            // However, we also need to reset the cursor position back to where it was
-            // before this particular attempt at reading a header so that
-            // the cursor position is not part-way through an invalid header when potentially
-            // trying to read something else after this function finishes.
-            try seekable_stream.seekTo(start_pos);
-            if (metadata.map.entries.items.len > 0) return metadata else return err;
-        };
+    const start_pos = try _seekable_stream.getPos();
+    var constrained_stream = constrainedStream(start_pos, _reader, _seekable_stream);
+    var constrained_reader = constrained_stream.reader();
+    var constrained_seekable_stream = constrained_stream.seekableStream();
 
-        end_of_current_atom = start_pos + atom_header.size;
+    var atom_it = AtomTreeIterator.init(allocator);
+    defer atom_it.deinit();
+
+    var metadata: *Metadata = undefined;
+
+    while (true) {
+        const maybe_atom = atom_it.next(constrained_reader, constrained_seekable_stream) catch |err| switch (err) {
+            // We can recover from certain errors
+            error.AtomSizeTooLarge,
+            error.AtomSizeTooSmall,
+            error.EndOfConstrainedStream,
+            => {
+                // Although if we're trying to read a root node, then there's no way to recover.
+                if (atom_it.atom_stack.items.len == 0) {
+                    return err;
+                }
+                const end_of_parent = atom_it.atom_stack.items[atom_it.atom_stack.items.len - 1].end_pos;
+                try constrained_seekable_stream.seekTo(end_of_parent);
+
+                const maybe_remaining_atom = atom_it.peekRemainingAtomAtPos(end_of_parent);
+                const state_update = AtomTreeIterator.stateFromRemainingAtom(maybe_remaining_atom);
+                state = state_update.state;
+                constrained_stream.constrained_end_pos = state_update.end_pos;
+                continue;
+            },
+            else => |e| return e,
+        };
+        if (maybe_atom == null) {
+            break;
+        }
+        const atom = maybe_atom.?;
+        constrained_stream.constrained_end_pos = atom.end_pos;
 
         switch (state) {
-            .start => if (std.mem.eql(u8, "moov", &atom_header.name)) {
+            .start => if (std.mem.eql(u8, "moov", &atom.header.name)) {
                 state = .in_moov;
                 continue;
             },
-            .in_moov => if (std.mem.eql(u8, "udta", &atom_header.name)) {
+            .in_moov => if (std.mem.eql(u8, "udta", &atom.header.name)) {
                 state = .in_udta;
                 continue;
             },
-            .in_udta => if (std.mem.eql(u8, "meta", &atom_header.name)) {
-                // The full atom header doesn't interest us but it has to be read.
-                _ = try FullAtomHeader.read(reader);
+            .in_udta => if (std.mem.eql(u8, "meta", &atom.header.name)) {
+                const meta_start_pos = (try constrained_seekable_stream.getPos()) - atom.header.headerSize();
 
-                metadata.start_offset = start_pos;
-                metadata.end_offset = end_of_current_atom;
+                // The full atom header doesn't interest us but it has to be read.
+                _ = try FullAtomHeader.read(constrained_reader);
+
+                try all_metadata.append(Metadata.init(allocator));
+                metadata = &all_metadata.items[all_metadata.items.len - 1];
+                metadata.start_offset = meta_start_pos;
+                metadata.end_offset = atom.end_pos;
 
                 state = .in_meta;
                 continue;
             },
-            .in_meta => if (std.mem.eql(u8, "ilst", &atom_header.name)) {
+            .in_meta => if (std.mem.eql(u8, "ilst", &atom.header.name)) {
                 // Used when handling the in_ilst state to know if there are more elements in the list.
-                end_of_ilst = end_of_current_atom;
+                end_of_ilst = atom.end_pos;
                 state = .in_ilst;
                 continue;
             },
             .in_ilst => {
-                readMetadataItem(allocator, reader, seekable_stream, &metadata, atom_header, end_of_current_atom) catch |err| switch (err) {
+                readMetadataItem(allocator, constrained_reader, constrained_seekable_stream, metadata, atom.header, atom.end_pos) catch |err| switch (err) {
                     // Some errors within the ilst can be recovered from by skipping the invalid atom
                     error.DataAtomSizeTooLarge,
                     error.DataAtomSizeTooSmall,
                     error.InvalidDataAtom,
                     error.AtomSizeTooSmall,
                     error.InvalidUTF16Data,
+                    error.EndOfConstrainedStream,
+                    error.AtomSizeTooLarge,
                     => {
-                        try seekable_stream.seekTo(end_of_current_atom);
+                        try constrained_seekable_stream.seekTo(atom.end_pos);
                     },
-                    else => |e| return e,
+                    else => |e| {
+                        return e;
+                    },
                 };
 
-                if ((try seekable_stream.getPos()) >= end_of_ilst) {
-                    state = .start;
+                // in order to read past this point, we need to set the constrained end
+                // back to the parent's end pos which we know is the ilst
+                constrained_stream.constrained_end_pos = end_of_ilst;
+
+                if ((try constrained_seekable_stream.getPos()) >= end_of_ilst) {
+                    const maybe_remaining_atom = atom_it.peekRemainingAtomAtPos(try constrained_seekable_stream.getPos());
+                    const state_update = AtomTreeIterator.stateFromRemainingAtom(maybe_remaining_atom);
+                    state = state_update.state;
+                    constrained_stream.constrained_end_pos = state_update.end_pos;
                 }
                 continue;
             },
         }
 
         // Skip every atom we don't recognize or are not interested in.
-        try seekByExtended(seekable_stream, atom_header.sizeExcludingHeader());
+        try seekByExtended(constrained_seekable_stream, atom.header.sizeExcludingHeader());
+
+        const maybe_remaining_atom = atom_it.peekRemainingAtomAtPos(try constrained_seekable_stream.getPos());
+        const state_update = AtomTreeIterator.stateFromRemainingAtom(maybe_remaining_atom);
+        state = state_update.state;
+        constrained_stream.constrained_end_pos = state_update.end_pos;
+    }
+}
+
+/// An MP4 file contains trees of atoms. An "atom" is the building block of a MP4 container.
+///
+/// This function reads all continguous atom trees from an MP4 file and returns a slice
+/// containing all the metadata found within, if any.
+/// If no metadata is found within the tree, but a complete atom tree was read successfully,
+/// then this function returns a slice with length 0.
+///
+/// MP4 is defined in ISO/IEC 14496-14 but MP4 files are essentially identical to QuickTime container files.
+/// See https://wiki.multimedia.cx/index.php/QuickTime_container for information.
+///
+/// This function does just enough to extract the metadata relevant to an audio file
+pub fn readAll(allocator: Allocator, reader: anytype, seekable_stream: anytype) ![]Metadata {
+    var all_metadata = std.ArrayList(Metadata).init(allocator);
+    errdefer {
+        for (all_metadata.items) |*item| {
+            item.deinit();
+        }
+        all_metadata.deinit();
     }
 
-    return metadata;
+    // We assume that the MP4 file respects the following layout which seem to be standard:
+    //
+    // ftyp
+    // [...] (potentially other top-level atoms)
+    // [...] (potentially other top-level atoms)
+    //
+    // For this function, we want to validate the ftyp atom first in order
+    // to short-circuit when reading non-MP4 files, since when reading unknown
+    // atoms it's possible that the headers can 'seem' valid even when they aren't.
+    try readFtyp(reader, seekable_stream);
+
+    var num_atoms_read: usize = 0;
+    while (true) : (num_atoms_read += 1) {
+        var start_pos = try seekable_stream.getPos();
+        readFullAtomIntoArrayList(allocator, reader, seekable_stream, &all_metadata) catch |err| switch (err) {
+            // If we hit parse errors, we only want to return the error if we haven't
+            // read anything successfully
+            error.EndOfConstrainedStream,
+            error.EndOfStream,
+            error.AtomSizeTooLarge,
+            error.AtomSizeTooSmall,
+            => {
+                // Because of the nature of the mp4 format, we can't really detect when
+                // all of the atoms are 'done', and instead will always get some type of error
+                // when reading the next atom tree (EndOfStream or some other error).
+                // So, if we have already read something successfully, then we treat it as
+                // a successful read and return whatever metadata we've read so far.
+                // However, we also need to reset the cursor position back to where it was
+                // before this particular attempt at reading an atom tree so that
+                // the cursor position is not part-way through an invalid tree when potentially
+                // trying to read something else after this function finishes.
+                try seekable_stream.seekTo(start_pos);
+                if (num_atoms_read > 0) return all_metadata.toOwnedSlice() else return err;
+            },
+            // Any other error we always want to return the error (OutOfMemory, etc)
+            else => |e| return e,
+        };
+    }
+
+    unreachable;
 }
 
 /// SeekableStream.seekBy wrapper that allows for u64 sizes
@@ -606,9 +880,14 @@ test "data atom size too large" {
     try std.testing.expectEqual(@as(usize, 1), metadata.map.entries.items.len);
 }
 
-test "atom size too big" {
+test "end of file when reading header" {
     const res = readData(std.testing.allocator, ftyp_test_data ++ "\x11\x11\x11\x11\x20\x20");
     try std.testing.expectError(error.EndOfStream, res);
+}
+
+test "atom size too large on root" {
+    const res = readData(std.testing.allocator, ftyp_test_data ++ "\x11\x11\x11\x11moov");
+    try std.testing.expectError(error.AtomSizeTooLarge, res);
 }
 
 test "data atom bad type" {
@@ -660,19 +939,211 @@ test "extended size smaller than extended header len" {
     try std.testing.expectError(error.AtomSizeTooSmall, res);
 }
 
-const ftyp_test_data = "\x00\x00\x00\x08ftyp";
+test "read tree, then skip sibling to end of parent" {
+    // This is a tree like so:
+    // ftyp
+    // moov
+    //  udta
+    //   chld
+    //  sibl
+    //
+    // What should happen is the ftyp tree is read, then the moov tree,
+    // then the udta leaf, then it should read the header of the chld
+    // leaf, but skip it since it's not 'meta'. Since the end of `chld` lines
+    // up with the end of its parent, the constrained stream end should be
+    // set to the end of the 'moov' atom (since we're not done reading it).
+    //
+    // In terms of memory layout, the tree will look like this:
+    // |-ftyp-|
+    //        |----------moov---------|
+    //            |----udta----|
+    //                  |-chld-|
+    //                         |-sibl-|
+    //
+    // (note that the `udta` and `chld` atoms end at the same point)
+    // zig fmt: off
+    const test_data =
+        ftyp_test_data ++
+        "\x00\x00\x00\x20moov" ++
+          "\x00\x00\x00\x10udta" ++
+            "\x00\x00\x00\x08chld" ++
+          "\x00\x00\x00\x08sibl"
+    ;
+    // zig fmt: on
+    var stream_source = std.io.StreamSource{ .const_buffer = std.io.fixedBufferStream(test_data) };
+    const meta_slice = try readAll(std.testing.allocator, stream_source.reader(), stream_source.seekableStream());
 
-fn writeTestData(allocator: Allocator, metadata_payload: []const u8) ![]u8 {
-    var data = std.ArrayList(u8).init(allocator);
-    errdefer data.deinit();
+    // there's no metadata to be read, we just want to check that we didn't hit an error
+    try std.testing.expect(meta_slice.len == 0);
+}
+
+test "skip invalid leafs by skipping the invalid leaf's parent entirely" {
+    // In terms of memory layout, the tree will look like this:
+    // |-ftyp-|
+    //        |----------moov-----------------------|
+    //            |------udta-----------|
+    //                    |-chl1-|========| (=== is the encoded size which exceeds its parent's)
+    //                           |-chl2-|
+    //                                  |-udta- ... |
+    //                                          ...
+    //
+    // The idea here is that we need to deal with `chl1` having an incorrectly encoded size.
+    // However, because we can't be sure that `chl2` is actually directly after `chl1` in memory, we
+    // can't determine where we should start trying to read its header. Instead, we
+    // need to skip to the end of its parent (`udta`) and try reading the next atom (`sibl`) as normal.
+    //
+    // zig fmt: off
+    const test_data =
+        ftyp_test_data ++
+        "\x00\x00\x00\x54moov" ++
+          "\x00\x00\x00\x18udta" ++
+            "\x00\x00\x10\x00chl1" ++
+            "\x00\x00\x00\x08chl2" ++
+          "\x00\x00\x00\x34udta" ++
+            "\x00\x00\x00\x2Cmeta\x01\x00\x00\x00" ++
+              "\x00\x00\x00\x20ilst" ++
+                "\x00\x00\x00\x18\xA9nam\x00\x00\x00\x10data\x00\x00\x00\x01\x00\x00\x00\x00"
+    ;
+    // zig fmt: on
+
+    var metadata = try readData(std.testing.allocator, test_data);
+    defer metadata.deinit();
+
+    // the udta with the invalid child should be skipped but the valid udta should be read
+    try std.testing.expectEqual(@as(usize, 1), metadata.map.entries.items.len);
+}
+
+test "multiple atom trees with metadata in each" {
+    // Constructs mp4 data with this structure:
+    // ftyp
+    // moov
+    //  udta
+    //   meta
+    //    ilst
+    // moov
+    //  udta
+    //   meta
+    //    ilst
+    //
+    // and ensures that we get the metadata from all 'meta' atoms within both 'moov' trees.
+    const metadata_data = "\x00\x00\x00\x18\xA9nam\x00\x00\x00\x10data\x00\x00\x00\x01\x00\x00\x00\x00";
+
+    var data = std.ArrayList(u8).init(std.testing.allocator);
+    defer data.deinit();
+
+    var data_writer = data.writer();
+    try data_writer.writeAll(ftyp_test_data);
+    try writeTestMoovData(data_writer, metadata_data);
+    try writeTestMoovData(data_writer, metadata_data);
+
+    var stream_source = std.io.StreamSource{ .buffer = std.io.fixedBufferStream(data.items) };
+    const meta_slice = try readAll(std.testing.allocator, stream_source.reader(), stream_source.seekableStream());
+    defer {
+        for (meta_slice) |*meta| {
+            meta.deinit();
+        }
+        std.testing.allocator.free(meta_slice);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), meta_slice.len);
+    for (meta_slice) |*meta| {
+        try std.testing.expectEqual(@as(usize, 1), meta.map.entries.items.len);
+        try std.testing.expectEqualStrings("", meta.map.getFirst("\xA9nam").?);
+    }
+}
+
+test "one moov tree with multiple metadata atoms" {
+    // Constructs mp4 data with this structure:
+    // ftyp
+    // moov
+    //  udta
+    //   meta
+    //    ilst
+    //   meta
+    //    ilst
+    //
+    // and ensures that we get the metadata from both 'meta' atoms.
+    const metadata_data = "\x00\x00\x00\x18\xA9nam\x00\x00\x00\x10data\x00\x00\x00\x01\x00\x00\x00\x00";
+
+    var data = std.ArrayList(u8).init(std.testing.allocator);
+    defer data.deinit();
+
+    var writer = data.writer();
+    try writer.writeAll(ftyp_test_data);
 
     const moov_len = AtomHeader.len;
     const udta_len = AtomHeader.len;
     const meta_len = AtomHeader.len + FullAtomHeader.len;
     const ilst_len = AtomHeader.len;
 
+    const meta_atom_len = meta_len + ilst_len + @intCast(u32, metadata_data.len);
+    var atom_len: u32 = moov_len + udta_len + meta_atom_len * 2;
+    try writer.writeIntBig(u32, atom_len);
+    try writer.writeAll("moov");
+    atom_len -= moov_len;
+    try writer.writeIntBig(u32, atom_len);
+    try writer.writeAll("udta");
+    atom_len = meta_atom_len;
+    try writer.writeIntBig(u32, atom_len);
+    try writer.writeAll("meta");
+    try writer.writeByte(1);
+    try writer.writeIntBig(u24, 0);
+    atom_len -= meta_len;
+    try writer.writeIntBig(u32, atom_len);
+    try writer.writeAll("ilst");
+    try writer.writeAll(metadata_data);
+
+    // second meta within the udta
+    atom_len = meta_atom_len;
+    try writer.writeIntBig(u32, atom_len);
+    try writer.writeAll("meta");
+    try writer.writeByte(1);
+    try writer.writeIntBig(u24, 0);
+    atom_len -= meta_len;
+    try writer.writeIntBig(u32, atom_len);
+    try writer.writeAll("ilst");
+    try writer.writeAll(metadata_data);
+
+    var stream_source = std.io.StreamSource{ .buffer = std.io.fixedBufferStream(data.items) };
+    const meta_slice = try readAll(std.testing.allocator, stream_source.reader(), stream_source.seekableStream());
+    defer {
+        for (meta_slice) |*meta| {
+            meta.deinit();
+        }
+        std.testing.allocator.free(meta_slice);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), meta_slice.len);
+    for (meta_slice) |*meta| {
+        try std.testing.expectEqual(@as(usize, 1), meta.map.entries.items.len);
+        try std.testing.expectEqualStrings("", meta.map.getFirst("\xA9nam").?);
+    }
+}
+
+const ftyp_test_data = "\x00\x00\x00\x08ftyp";
+
+test "readFtyp" {
+    var stream_source = std.io.StreamSource{ .const_buffer = std.io.fixedBufferStream(ftyp_test_data) };
+    return try readFtyp(stream_source.reader(), stream_source.seekableStream());
+}
+
+fn writeTestData(allocator: Allocator, metadata_payload: []const u8) ![]u8 {
+    var data = std.ArrayList(u8).init(allocator);
+    errdefer data.deinit();
+
     var writer = data.writer();
     try writer.writeAll(ftyp_test_data);
+
+    try writeTestMoovData(writer, metadata_payload);
+
+    return data.toOwnedSlice();
+}
+
+fn writeTestMoovData(writer: anytype, metadata_payload: []const u8) !void {
+    const moov_len = AtomHeader.len;
+    const udta_len = AtomHeader.len;
+    const meta_len = AtomHeader.len + FullAtomHeader.len;
+    const ilst_len = AtomHeader.len;
 
     var atom_len: u32 = moov_len + udta_len + meta_len + ilst_len + @intCast(u32, metadata_payload.len);
     try writer.writeIntBig(u32, atom_len);
@@ -690,11 +1161,13 @@ fn writeTestData(allocator: Allocator, metadata_payload: []const u8) ![]u8 {
     try writer.writeAll("ilst");
 
     try writer.writeAll(metadata_payload);
-
-    return data.toOwnedSlice();
 }
 
 fn readData(allocator: Allocator, data: []const u8) !Metadata {
     var stream_source = std.io.StreamSource{ .const_buffer = std.io.fixedBufferStream(data) };
-    return try read(allocator, stream_source.reader(), stream_source.seekableStream());
+    const meta_slice = try readAll(allocator, stream_source.reader(), stream_source.seekableStream());
+    std.debug.assert(meta_slice.len == 1);
+    const meta = (meta_slice)[0];
+    allocator.free(meta_slice);
+    return meta;
 }
