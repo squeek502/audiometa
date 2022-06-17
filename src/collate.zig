@@ -2,6 +2,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const AllMetadata = @import("metadata.zig").AllMetadata;
 const ziglyph = @import("ziglyph");
+const windows1251 = @import("windows1251.zig");
+const latin1 = @import("latin1.zig");
 
 pub const Collator = struct {
     metadata: *AllMetadata,
@@ -98,26 +100,32 @@ const CollatedTextSet = struct {
     }
 
     pub fn put(self: *Self, value: []const u8) !void {
+        const trimmed = std.mem.trim(u8, value, " \x00");
+        if (trimmed.len == 0) return;
+
+        var translated: ?[]u8 = null;
+        if (latin1.isUtf8AllLatin1(trimmed) and windows1251.couldBeWindows1251(trimmed)) {
+            const extended_ascii_str = try latin1.utf8ToLatin1Alloc(self.arena, trimmed);
+            translated = try windows1251.windows1251ToUtf8Alloc(self.arena, extended_ascii_str);
+        }
+        const lowered = try ziglyph.toCaseFoldStr(self.arena, translated orelse trimmed);
+
         var normalizer = try ziglyph.Normalizer.init(self.arena);
         defer normalizer.deinit();
 
-        const trimmed = std.mem.trim(u8, value, " \x00");
-        if (trimmed.len != 0) {
-            const lowered = try ziglyph.toCaseFoldStr(self.arena, trimmed);
-            const normalized = try normalizer.normalizeTo(.canon, lowered);
-            const result = try self.normalized_set.getOrPut(self.arena, normalized);
-            if (!result.found_existing) {
-                // We need to dupe the normalized version of the string when
-                // storing it because ziglyph.Normalizer creates an arena and
-                // destroys the arena on normalizer.deinit(), which would
-                // destroy the normalized version of the string that was
-                // used as the key for the normalized_set.
-                result.key_ptr.* = try self.arena.dupe(u8, normalized);
+        const normalized = try normalizer.normalizeTo(.canon, lowered);
+        const result = try self.normalized_set.getOrPut(self.arena, normalized);
+        if (!result.found_existing) {
+            // We need to dupe the normalized version of the string when
+            // storing it because ziglyph.Normalizer creates an arena and
+            // destroys the arena on normalizer.deinit(), which would
+            // destroy the normalized version of the string that was
+            // used as the key for the normalized_set.
+            result.key_ptr.* = try self.arena.dupe(u8, normalized);
 
-                const index = self.values.items.len;
-                try self.values.append(self.arena, trimmed);
-                result.value_ptr.* = index;
-            }
+            const index = self.values.items.len;
+            try self.values.append(self.arena, translated orelse trimmed);
+            result.value_ptr.* = index;
         }
     }
 
@@ -154,5 +162,21 @@ test "CollatedTextSet utf-8 normalization" {
     try set.put("foé");
     try set.put("foe\u{0301}");
 
+    try std.testing.expectEqual(@as(usize, 1), set.count());
+}
+
+test "CollatedTextSet windows-1251 detection" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var set = CollatedTextSet.init(arena.allocator());
+    defer set.deinit();
+
+    // Note: the Latin-1 bytes here are "\xC0\xEF\xEE\xF1\xF2\xF0\xEE\xF4"
+    try set.put("Àïîñòðîô");
+
+    try std.testing.expectEqualStrings("Апостроф", set.values.items[0]);
+
+    try set.put("АПОСТРОФ");
     try std.testing.expectEqual(@as(usize, 1), set.count());
 }
