@@ -11,10 +11,13 @@ pub fn build(b: *std.build.Builder) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
     const mode = b.standardReleaseOptions();
 
+    const ziglyph_path = "lib/ziglyph/src/ziglyph.zig";
+
     const exe = b.addExecutable("audiometa", "src/main.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
     exe.addPackagePath("audiometa", "src/audiometa.zig");
+    exe.addPackagePath("ziglyph", ziglyph_path);
     exe.install();
 
     const run_cmd = exe.run();
@@ -33,6 +36,7 @@ pub fn build(b: *std.build.Builder) void {
     tests.setBuildMode(mode);
     tests.setTarget(target);
     tests.setFilter(test_filter);
+    tests.addPackagePath("ziglyph", ziglyph_path);
 
     const test_lib_step = b.step("test-lib", "Run all library tests (without parse tests)");
     test_lib_step.dependOn(&tests.step);

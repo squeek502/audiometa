@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const AllMetadata = @import("metadata.zig").AllMetadata;
+const ziglyph = @import("ziglyph");
 
 pub const Collator = struct {
     metadata: *AllMetadata,
@@ -73,9 +74,9 @@ pub const Collator = struct {
 //       maybe startsWith detection
 const CollatedTextSet = struct {
     values: std.ArrayListUnmanaged([]const u8),
-    // TODO: UTF-8 normalization, and/or a comparison function
-    // that does proper UTF-8 case-insensitive comparisons
-    normalized_set: std.StringArrayHashMapUnmanaged(usize),
+    // TODO: Maybe do case-insensitivity/normalization during
+    //       hash/eql instead
+    normalized_set: std.StringHashMapUnmanaged(usize),
     arena: Allocator,
 
     const Self = @This();
@@ -85,7 +86,7 @@ const CollatedTextSet = struct {
     pub fn init(arena: Allocator) Self {
         return .{
             .values = std.ArrayListUnmanaged([]const u8){},
-            .normalized_set = std.StringArrayHashMapUnmanaged(usize){},
+            .normalized_set = std.StringHashMapUnmanaged(usize){},
             .arena = arena,
         };
     }
@@ -97,12 +98,22 @@ const CollatedTextSet = struct {
     }
 
     pub fn put(self: *Self, value: []const u8) !void {
-        const trimmed = std.mem.trim(u8, value, " ");
+        var normalizer = try ziglyph.Normalizer.init(self.arena);
+        defer normalizer.deinit();
+
+        const trimmed = std.mem.trim(u8, value, " \x00");
         if (trimmed.len != 0) {
-            // TODO: this isn't actually ascii, need UTF-8 lowering/normalizing
-            const normalized = try std.ascii.allocLowerString(self.arena, trimmed);
+            const lowered = try ziglyph.toCaseFoldStr(self.arena, trimmed);
+            const normalized = try normalizer.normalizeTo(.canon, lowered);
             const result = try self.normalized_set.getOrPut(self.arena, normalized);
             if (!result.found_existing) {
+                // We need to dupe the normalized version of the string when
+                // storing it because ziglyph.Normalizer creates an arena and
+                // destroys the arena on normalizer.deinit(), which would
+                // destroy the normalized version of the string that was
+                // used as the key for the normalized_set.
+                result.key_ptr.* = try self.arena.dupe(u8, normalized);
+
                 const index = self.values.items.len;
                 try self.values.append(self.arena, trimmed);
                 result.value_ptr.* = index;
@@ -114,3 +125,34 @@ const CollatedTextSet = struct {
         return self.values.items.len;
     }
 };
+
+test "CollatedTextSet utf-8 case-insensitivity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var set = CollatedTextSet.init(arena.allocator());
+    defer set.deinit();
+
+    try set.put("something");
+    try set.put("someTHING");
+
+    try std.testing.expectEqual(@as(usize, 1), set.count());
+
+    try set.put("cyriLLic И");
+    try set.put("cyrillic и");
+
+    try std.testing.expectEqual(@as(usize, 2), set.count());
+}
+
+test "CollatedTextSet utf-8 normalization" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var set = CollatedTextSet.init(arena.allocator());
+    defer set.deinit();
+
+    try set.put("foé");
+    try set.put("foe\u{0301}");
+
+    try std.testing.expectEqual(@as(usize, 1), set.count());
+}
