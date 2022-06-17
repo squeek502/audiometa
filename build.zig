@@ -11,13 +11,20 @@ pub fn build(b: *std.build.Builder) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
     const mode = b.standardReleaseOptions();
 
-    const ziglyph_path = "lib/ziglyph/src/ziglyph.zig";
+    const ziglyph = std.build.Pkg{
+        .name = "ziglyph",
+        .path = .{ .path = "lib/ziglyph/src/ziglyph.zig" },
+    };
+    const audiometa = std.build.Pkg{
+        .name = "audiometa",
+        .path = .{ .path = "src/audiometa.zig" },
+        .dependencies = &.{ziglyph},
+    };
 
     const exe = b.addExecutable("audiometa", "src/main.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
-    exe.addPackagePath("audiometa", "src/audiometa.zig");
-    exe.addPackagePath("ziglyph", ziglyph_path);
+    exe.addPackage(audiometa);
     exe.install();
 
     const run_cmd = exe.run();
@@ -36,7 +43,7 @@ pub fn build(b: *std.build.Builder) void {
     tests.setBuildMode(mode);
     tests.setTarget(target);
     tests.setFilter(test_filter);
-    tests.addPackagePath("ziglyph", ziglyph_path);
+    tests.addPackage(ziglyph);
 
     const test_lib_step = b.step("test-lib", "Run all library tests (without parse tests)");
     test_lib_step.dependOn(&tests.step);
@@ -45,7 +52,7 @@ pub fn build(b: *std.build.Builder) void {
     parse_tests.setBuildMode(mode);
     parse_tests.setTarget(target);
     parse_tests.setFilter(test_filter);
-    parse_tests.addPackagePath("audiometa", "src/audiometa.zig");
+    parse_tests.addPackage(audiometa);
 
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&tests.step);
@@ -55,7 +62,7 @@ pub fn build(b: *std.build.Builder) void {
     test_against_taglib.setBuildMode(mode);
     test_against_taglib.setTarget(target);
     test_against_taglib.setFilter(test_filter);
-    test_against_taglib.addPackagePath("audiometa", "src/audiometa.zig");
+    test_against_taglib.addPackage(audiometa);
     const test_against_taglib_step = b.step("test_against_taglib", "Test tag parsing against taglib");
     test_against_taglib_step.dependOn(&test_against_taglib.step);
 
@@ -63,14 +70,14 @@ pub fn build(b: *std.build.Builder) void {
     test_against_ffprobe.setBuildMode(mode);
     test_against_ffprobe.setTarget(target);
     test_against_ffprobe.setFilter(test_filter);
-    test_against_ffprobe.addPackagePath("audiometa", "src/audiometa.zig");
+    test_against_ffprobe.addPackage(audiometa);
     const test_against_ffprobe_step = b.step("test_against_ffprobe", "Test tag parsing against ffprobe");
     test_against_ffprobe_step.dependOn(&test_against_ffprobe.step);
 
     // Tools
 
     const extract_tag_exe = b.addExecutable("extract_tag", "tools/extract_tag.zig");
-    extract_tag_exe.addPackagePath("audiometa", "src/audiometa.zig");
+    extract_tag_exe.addPackage(audiometa);
     extract_tag_exe.setTarget(target);
     extract_tag_exe.setBuildMode(mode);
     extract_tag_exe.install();
@@ -84,16 +91,16 @@ pub fn build(b: *std.build.Builder) void {
     extract_tag_run_step.dependOn(&extract_tag_run.step);
 
     const synchsafe_exe = b.addExecutable("synchsafe", "tools/synchsafe.zig");
-    synchsafe_exe.addPackagePath("audiometa", "src/audiometa.zig");
+    synchsafe_exe.addPackage(audiometa);
     synchsafe_exe.setTarget(target);
     synchsafe_exe.setBuildMode(mode);
     synchsafe_exe.install();
 
     // Fuzz
 
-    _ = addFuzzer(b, "fuzz", &.{}) catch unreachable;
+    _ = addFuzzer(b, "fuzz", &.{}, audiometa) catch unreachable;
 
-    var fuzz_oom = addFuzzer(b, "fuzz-oom", &.{}) catch unreachable;
+    var fuzz_oom = addFuzzer(b, "fuzz-oom", &.{}, audiometa) catch unreachable;
     // setup build options
     {
         const debug_options = b.addOptions();
@@ -105,10 +112,10 @@ pub fn build(b: *std.build.Builder) void {
     }
 }
 
-fn addFuzzer(b: *std.build.Builder, comptime name: []const u8, afl_clang_args: []const []const u8) !FuzzerSteps {
+fn addFuzzer(b: *std.build.Builder, comptime name: []const u8, afl_clang_args: []const []const u8, pkg: std.build.Pkg) !FuzzerSteps {
     // The library
     const fuzz_lib = b.addStaticLibrary(name ++ "-lib", "test/" ++ name ++ ".zig");
-    fuzz_lib.addPackagePath("audiometa", "src/audiometa.zig");
+    fuzz_lib.addPackage(pkg);
     fuzz_lib.setBuildMode(.Debug);
     fuzz_lib.want_lto = true;
     fuzz_lib.bundle_compiler_rt = true;
@@ -134,7 +141,7 @@ fn addFuzzer(b: *std.build.Builder, comptime name: []const u8, afl_clang_args: [
 
     // Compile a companion exe for debugging crashes
     const fuzz_debug_exe = b.addExecutable(name ++ "-debug", "test/" ++ name ++ ".zig");
-    fuzz_debug_exe.addPackagePath("audiometa", "src/audiometa.zig");
+    fuzz_debug_exe.addPackage(pkg);
     fuzz_debug_exe.setBuildMode(.Debug);
 
     // Only install fuzz-debug when the fuzz step is run
