@@ -55,6 +55,12 @@ pub const Collator = struct {
                         try artist_set.put(artist);
                     }
                 },
+                .mp4 => |*mp4_meta| {
+                    var artist_it = mp4_meta.map.valueIterator("\xA9ART");
+                    while (artist_it.next()) |artist| {
+                        try artist_set.put(artist);
+                    }
+                },
             }
         }
 
