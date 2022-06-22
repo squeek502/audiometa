@@ -1,22 +1,31 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const AllMetadata = @import("metadata.zig").AllMetadata;
+const metadata_namespace = @import("metadata.zig");
+const Metadata = metadata_namespace.Metadata;
+const AllMetadata = metadata_namespace.AllMetadata;
+const MetadataType = metadata_namespace.MetadataType;
+const TypedMetadata = metadata_namespace.TypedMetadata;
+const id3v2_data = @import("id3v2_data.zig");
 const ziglyph = @import("ziglyph");
 const windows1251 = @import("windows1251.zig");
 const latin1 = @import("latin1.zig");
+
+pub const num_metadata_types = @typeInfo(MetadataType).Enum.fields.len;
 
 pub const Collator = struct {
     metadata: *AllMetadata,
     allocator: Allocator,
     arena: std.heap.ArenaAllocator,
+    prioritization: Prioritization,
 
     const Self = @This();
 
-    pub fn init(allocator: Allocator, metadata: *AllMetadata) Self {
+    pub fn init(allocator: Allocator, metadata: *AllMetadata, prioritization: Prioritization) Self {
         return Self{
             .metadata = metadata,
             .allocator = allocator,
             .arena = std.heap.ArenaAllocator.init(allocator),
+            .prioritization = prioritization,
         };
     }
 
@@ -24,58 +33,184 @@ pub const Collator = struct {
         self.arena.deinit();
     }
 
-    pub fn artists(self: *Self) ![][]const u8 {
-        var artist_set = CollatedTextSet.init(self.arena.allocator());
-        defer artist_set.deinit();
-
-        for (self.metadata.tags) |*tag| {
-            switch (tag.*) {
-                .id3v1 => {},
-                .flac => |*flac_meta| {
-                    var artist_it = flac_meta.map.valueIterator("ARTIST");
-                    while (artist_it.next()) |artist| {
-                        try artist_set.put(artist);
-                    }
-                },
-                .vorbis => |*vorbis_meta| {
-                    var artist_it = vorbis_meta.map.valueIterator("ARTIST");
-                    while (artist_it.next()) |artist| {
-                        try artist_set.put(artist);
-                    }
-                },
-                .id3v2 => |*id3v2_meta| {
-                    var artist_it = id3v2_meta.metadata.map.valueIterator("TPE1");
-                    while (artist_it.next()) |artist| {
-                        try artist_set.put(artist);
-                    }
-                },
-                .ape => |*ape_meta| {
-                    var artist_it = ape_meta.metadata.map.valueIterator("Artist");
-                    while (artist_it.next()) |artist| {
-                        try artist_set.put(artist);
-                    }
-                },
-                .mp4 => |*mp4_meta| {
-                    var artist_it = mp4_meta.map.valueIterator("\xA9ART");
-                    while (artist_it.next()) |artist| {
-                        try artist_set.put(artist);
-                    }
-                },
-            }
+    fn addValuesToSet(set: *CollatedTextSet, tag: *TypedMetadata, keys: [num_metadata_types]?[]const u8) !void {
+        const key = keys[@enumToInt(std.meta.activeTag(tag.*))] orelse return;
+        switch (tag.*) {
+            .id3v1 => |*id3v1_meta| {
+                if (id3v1_meta.map.getFirst(key)) |value| {
+                    try set.put(value);
+                }
+            },
+            .flac => |*flac_meta| {
+                var value_it = flac_meta.map.valueIterator(key);
+                while (value_it.next()) |value| {
+                    try set.put(value);
+                }
+            },
+            .vorbis => |*vorbis_meta| {
+                var value_it = vorbis_meta.map.valueIterator(key);
+                while (value_it.next()) |value| {
+                    try set.put(value);
+                }
+            },
+            .id3v2 => |*id3v2_meta| {
+                var value_it = id3v2_meta.metadata.map.valueIterator(key);
+                while (value_it.next()) |value| {
+                    try set.put(value);
+                }
+            },
+            .ape => |*ape_meta| {
+                var value_it = ape_meta.metadata.map.valueIterator(key);
+                while (value_it.next()) |value| {
+                    try set.put(value);
+                }
+            },
+            .mp4 => |*mp4_meta| {
+                var value_it = mp4_meta.map.valueIterator(key);
+                while (value_it.next()) |value| {
+                    try set.put(value);
+                }
+            },
         }
+    }
 
-        // id3v1 is a last resort
-        if (artist_set.count() == 0) {
-            if (self.metadata.getLastMetadataOfType(.id3v1)) |id3v1_meta| {
-                if (id3v1_meta.map.getFirst("artist")) |artist| {
-                    try artist_set.put(artist);
+    pub fn getValuesFromKeys(self: *Self, keys: [num_metadata_types]?[]const u8) ![][]const u8 {
+        var set = CollatedTextSet.init(self.arena.allocator());
+        defer set.deinit();
+
+        for (self.prioritization.order) |meta_type| {
+            const is_last_resort = self.prioritization.priority(meta_type) == .last_resort;
+            if (!is_last_resort or set.count() == 0) {
+                var meta_it = self.metadata.metadataOfTypeIterator(meta_type);
+                while (meta_it.next()) |meta| {
+                    try addValuesToSet(&set, meta, keys);
                 }
             }
         }
+        return try self.arena.allocator().dupe([]const u8, set.values.items);
+    }
 
-        return try self.arena.allocator().dupe([]const u8, artist_set.values.items);
+    const artist_keys = init: {
+        var array: [num_metadata_types]?[]const u8 = undefined;
+        for (array) |*v| {
+            v.* = null;
+        }
+        array[@enumToInt(MetadataType.id3v1)] = "artist";
+        array[@enumToInt(MetadataType.flac)] = "ARTIST";
+        array[@enumToInt(MetadataType.vorbis)] = "ARTIST";
+        array[@enumToInt(MetadataType.id3v2)] = "TPE1";
+        array[@enumToInt(MetadataType.ape)] = "Artist";
+        array[@enumToInt(MetadataType.mp4)] = "\xA9ART";
+        break :init array;
+    };
+
+    pub fn artists(self: *Self) ![][]const u8 {
+        return self.getValuesFromKeys(artist_keys);
+    }
+
+    const album_keys = init: {
+        var array: [num_metadata_types]?[]const u8 = undefined;
+        for (array) |*v| {
+            v.* = null;
+        }
+        array[@enumToInt(MetadataType.id3v1)] = "album";
+        array[@enumToInt(MetadataType.flac)] = "ALBUM";
+        array[@enumToInt(MetadataType.vorbis)] = "ALBUM";
+        array[@enumToInt(MetadataType.id3v2)] = "TALB";
+        array[@enumToInt(MetadataType.ape)] = "Album";
+        array[@enumToInt(MetadataType.mp4)] = "\xA9alb";
+        break :init array;
+    };
+
+    pub fn albums(self: *Self) ![][]const u8 {
+        return self.getValuesFromKeys(album_keys);
     }
 };
+
+pub const Prioritization = struct {
+    order: [num_metadata_types]MetadataType,
+    priorities: [num_metadata_types]Priority,
+
+    pub const Priority = enum {
+        normal,
+        last_resort,
+    };
+
+    pub fn priority(self: Prioritization, meta_type: MetadataType) Priority {
+        return self.priorities[@enumToInt(meta_type)];
+    }
+};
+
+pub const default_prioritization = Prioritization{
+    .order = [_]MetadataType{ .mp4, .flac, .vorbis, .id3v2, .ape, .id3v1 },
+    .priorities = init: {
+        var priorities = [_]Prioritization.Priority{.normal} ** num_metadata_types;
+        priorities[@enumToInt(MetadataType.id3v1)] = .last_resort;
+        break :init priorities;
+    },
+};
+
+test "prioritization last resort" {
+    var allocator = std.testing.allocator;
+    var metadata_buf = std.ArrayList(TypedMetadata).init(allocator);
+    defer metadata_buf.deinit();
+
+    try metadata_buf.append(TypedMetadata{ .id3v2 = .{
+        .metadata = Metadata.init(allocator),
+        .user_defined = metadata_namespace.MetadataMap.init(allocator),
+        .header = undefined,
+        .comments = id3v2_data.FullTextMap.init(allocator),
+        .unsynchronized_lyrics = id3v2_data.FullTextMap.init(allocator),
+    } });
+    try metadata_buf.items[0].id3v2.metadata.map.put("TPE1", "test");
+
+    try metadata_buf.append(TypedMetadata{ .id3v1 = Metadata.init(allocator) });
+    try metadata_buf.items[1].id3v1.map.put("artist", "ignored");
+
+    var all = AllMetadata{
+        .allocator = allocator,
+        .tags = metadata_buf.toOwnedSlice(),
+    };
+    defer all.deinit();
+
+    var collator = Collator.init(allocator, &all, default_prioritization);
+    defer collator.deinit();
+
+    const artists = try collator.artists();
+    try std.testing.expectEqual(@as(usize, 1), artists.len);
+    try std.testing.expectEqualStrings("test", artists[0]);
+}
+
+test "prioritization flac > ape" {
+    var allocator = std.testing.allocator;
+    var metadata_buf = std.ArrayList(TypedMetadata).init(allocator);
+    defer metadata_buf.deinit();
+
+    // flac is prioritized over ape, so for duplicate keys the flac casing
+    // should end up in the result even if ape comes first in the file
+
+    try metadata_buf.append(TypedMetadata{ .ape = .{
+        .metadata = Metadata.init(allocator),
+        .header_or_footer = undefined,
+    } });
+    try metadata_buf.items[0].ape.metadata.map.put("Artist", "FLACcase");
+
+    try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
+    try metadata_buf.items[1].flac.map.put("ARTIST", "FlacCase");
+
+    var all = AllMetadata{
+        .allocator = allocator,
+        .tags = metadata_buf.toOwnedSlice(),
+    };
+    defer all.deinit();
+
+    var collator = Collator.init(allocator, &all, default_prioritization);
+    defer collator.deinit();
+
+    const artists = try collator.artists();
+    try std.testing.expectEqual(@as(usize, 1), artists.len);
+    try std.testing.expectEqualStrings("FlacCase", artists[0]);
+}
 
 // TODO: Some sort of CollatedSet that does:
 //       Trimming, empty value detection, case-insensitivity,
