@@ -812,7 +812,7 @@ pub fn readAll(allocator: Allocator, reader: anytype, seekable_stream: anytype) 
 fn seekByExtended(seekable_stream: anytype, amount: u64) !void {
     if (std.math.cast(u32, amount)) |seek_amount| {
         try seekable_stream.seekBy(seek_amount);
-    } else |_| {
+    } else {
         var remaining = amount;
         while (remaining > 0) {
             const seek_amt = std.math.min(remaining, std.math.maxInt(u32));

@@ -13,11 +13,11 @@ pub fn build(b: *std.build.Builder) void {
 
     const ziglyph = std.build.Pkg{
         .name = "ziglyph",
-        .path = .{ .path = "lib/ziglyph/src/ziglyph.zig" },
+        .source = .{ .path = "lib/ziglyph/src/ziglyph.zig" },
     };
     const audiometa = std.build.Pkg{
         .name = "audiometa",
-        .path = .{ .path = "src/audiometa.zig" },
+        .source = .{ .path = "src/audiometa.zig" },
         .dependencies = &.{ziglyph},
     };
 
