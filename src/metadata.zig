@@ -291,6 +291,31 @@ pub const AllMetadata = struct {
         }
     }
 
+    pub const MetadataOfTypeIterator = struct {
+        all_metadata: *const AllMetadata,
+        metadata_type: MetadataType,
+        index: usize,
+
+        pub fn next(self: *MetadataOfTypeIterator) ?*TypedMetadata {
+            while (self.index < self.all_metadata.tags.len) : (self.index += 1) {
+                if (self.all_metadata.tags[self.index] == self.metadata_type) {
+                    var tag_ptr = &self.all_metadata.tags[self.index];
+                    self.index += 1;
+                    return tag_ptr;
+                }
+            }
+            return null;
+        }
+    };
+
+    pub fn metadataOfTypeIterator(self: *const AllMetadata, metadata_type: MetadataType) MetadataOfTypeIterator {
+        return MetadataOfTypeIterator{
+            .all_metadata = self,
+            .metadata_type = metadata_type,
+            .index = 0,
+        };
+    }
+
     /// Returns an allocated slice of pointers to all metadata of the given type.
     /// Caller is responsible for freeing the slice's memory.
     pub fn getAllMetadataOfType(self: AllMetadata, allocator: Allocator, comptime tag_type: MetadataType) ![]*std.meta.TagPayload(TypedMetadata, tag_type) {
@@ -721,4 +746,13 @@ test "AllMetadata.getXOfType" {
     try std.testing.expect(last_id3v1 == &all.tags[all.tags.len - 1].id3v1);
 
     try std.testing.expect(null == all.getFirstMetadataOfType(.vorbis));
+
+    // iterator
+    var id3v2_count: usize = 0;
+    var metadata_it = all.metadataOfTypeIterator(.id3v2);
+    while (metadata_it.next()) |typed_metadata| {
+        try std.testing.expect(typed_metadata.* == .id3v2);
+        id3v2_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), id3v2_count);
 }
