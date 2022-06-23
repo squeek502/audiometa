@@ -91,10 +91,7 @@ pub const Collator = struct {
     }
 
     const artist_keys = init: {
-        var array: [num_metadata_types]?[]const u8 = undefined;
-        for (array) |*v| {
-            v.* = null;
-        }
+        var array = [_]?[]const u8{null} ** num_metadata_types;
         array[@enumToInt(MetadataType.id3v1)] = "artist";
         array[@enumToInt(MetadataType.flac)] = "ARTIST";
         array[@enumToInt(MetadataType.vorbis)] = "ARTIST";
@@ -109,10 +106,7 @@ pub const Collator = struct {
     }
 
     const album_keys = init: {
-        var array: [num_metadata_types]?[]const u8 = undefined;
-        for (array) |*v| {
-            v.* = null;
-        }
+        var array = [_]?[]const u8{null} ** num_metadata_types;
         array[@enumToInt(MetadataType.id3v1)] = "album";
         array[@enumToInt(MetadataType.flac)] = "ALBUM";
         array[@enumToInt(MetadataType.vorbis)] = "ALBUM";
