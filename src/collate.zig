@@ -206,9 +206,15 @@ test "prioritization flac > ape" {
     try std.testing.expectEqualStrings("FlacCase", artists[0]);
 }
 
-// TODO: Some sort of CollatedSet that does:
-//       Trimming, empty value detection, case-insensitivity,
-//       maybe startsWith detection
+/// Set that:
+/// - Trims spaces and NUL from both sides of inputs
+/// - Converts inputs to inferred character encodings (e.g. Windows-1251)
+/// - De-duplicates via UTF-8 normalization and case normalization
+/// - Ignores empty values
+///
+/// Canonical values in the set are stored in an ArrayList
+///
+/// TODO: Maybe startsWith detection of some kind (but this might lead to false positives)
 const CollatedTextSet = struct {
     values: std.ArrayListUnmanaged([]const u8),
     // TODO: Maybe do case-insensitivity/normalization during
