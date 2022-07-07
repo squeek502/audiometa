@@ -292,17 +292,11 @@ pub const AllMetadata = struct {
     }
 
     pub const MetadataOfTypeIterator = struct {
-        all_metadata: *const AllMetadata,
-        metadata_type: MetadataType,
-        index: usize,
+        metadata_index_iterator: MetadataOfTypeIndexIterator,
 
         pub fn next(self: *MetadataOfTypeIterator) ?*TypedMetadata {
-            while (self.index < self.all_metadata.tags.len) : (self.index += 1) {
-                if (self.all_metadata.tags[self.index] == self.metadata_type) {
-                    var tag_ptr = &self.all_metadata.tags[self.index];
-                    self.index += 1;
-                    return tag_ptr;
-                }
+            if (self.metadata_index_iterator.next()) |index| {
+                return &self.metadata_index_iterator.all_metadata.tags[index];
             }
             return null;
         }
@@ -310,6 +304,29 @@ pub const AllMetadata = struct {
 
     pub fn metadataOfTypeIterator(self: *const AllMetadata, metadata_type: MetadataType) MetadataOfTypeIterator {
         return MetadataOfTypeIterator{
+            .metadata_index_iterator = metadataOfTypeIndexIterator(self, metadata_type),
+        };
+    }
+
+    pub const MetadataOfTypeIndexIterator = struct {
+        all_metadata: *const AllMetadata,
+        metadata_type: MetadataType,
+        index: usize,
+
+        pub fn next(self: *MetadataOfTypeIndexIterator) ?usize {
+            while (self.index < self.all_metadata.tags.len) : (self.index += 1) {
+                if (self.all_metadata.tags[self.index] == self.metadata_type) {
+                    const index = self.index;
+                    self.index += 1;
+                    return index;
+                }
+            }
+            return null;
+        }
+    };
+
+    pub fn metadataOfTypeIndexIterator(self: *const AllMetadata, metadata_type: MetadataType) MetadataOfTypeIndexIterator {
+        return MetadataOfTypeIndexIterator{
             .all_metadata = self,
             .metadata_type = metadata_type,
             .index = 0,
@@ -351,6 +368,17 @@ pub const AllMetadata = struct {
             }
         }
         return null;
+    }
+
+    pub fn countIgnoringDuplicates(self: AllMetadata) usize {
+        var count: usize = 0;
+        inline for (@typeInfo(MetadataType).Enum.fields) |enum_field| {
+            const tag_type = @intToEnum(MetadataType, enum_field.value);
+            if (self.getFirstMetadataOfType(tag_type) != null) {
+                count += 1;
+            }
+        }
+        return count;
     }
 };
 

@@ -16,21 +16,142 @@ pub const Collator = struct {
     metadata: *AllMetadata,
     allocator: Allocator,
     arena: std.heap.ArenaAllocator,
-    prioritization: Prioritization,
+    config: Config,
+    tag_indexes_by_priority: []usize,
 
     const Self = @This();
 
-    pub fn init(allocator: Allocator, metadata: *AllMetadata, prioritization: Prioritization) Self {
-        return Self{
+    pub const Config = struct {
+        prioritization: Prioritization = default_prioritization,
+        duplicate_tag_strategy: DuplicateTagStrategy = .prioritize_best,
+
+        pub const DuplicateTagStrategy = enum {
+            /// Use a heuristic to select the 'best' tag for any tag types with multiple tags.
+            ///
+            /// TODO: Improve the heuristic; right now it uses largest number of fields in the tag.
+            prioritize_best,
+            /// Always prioritize the first tag for each tag type, and fall back
+            /// to subsequent tags of that type (in file order)
+            ///
+            /// Note: This is how ffmpeg/libavformat handles duplicate ID3v2 tags.
+            prioritize_first,
+            /// Only look at the first tag (in file order) for each tag type, ignoring all
+            /// duplicate tags entirely.
+            ///
+            /// Note: This is how TagLib handles duplicate ID3v2 tags.
+            ignore_duplicates,
+        };
+    };
+
+    pub fn init(allocator: Allocator, metadata: *AllMetadata, config: Config) !Self {
+        var collator = Self{
             .metadata = metadata,
             .allocator = allocator,
             .arena = std.heap.ArenaAllocator.init(allocator),
-            .prioritization = prioritization,
+            .config = config,
+            .tag_indexes_by_priority = &[_]usize{},
         };
+        switch (config.duplicate_tag_strategy) {
+            .prioritize_best => {
+                collator.tag_indexes_by_priority = try collator.arena.allocator().alloc(usize, metadata.tags.len);
+                determineBestTagPriorities(metadata, config.prioritization, collator.tag_indexes_by_priority);
+            },
+            .prioritize_first => {
+                collator.tag_indexes_by_priority = try collator.arena.allocator().alloc(usize, metadata.tags.len);
+                determineFileOrderTagPriorities(metadata, config.prioritization, collator.tag_indexes_by_priority, false);
+            },
+            .ignore_duplicates => {
+                const count_ignoring_duplicates = metadata.countIgnoringDuplicates();
+                collator.tag_indexes_by_priority = try collator.arena.allocator().alloc(usize, count_ignoring_duplicates);
+                determineFileOrderTagPriorities(metadata, config.prioritization, collator.tag_indexes_by_priority, true);
+            },
+        }
+        return collator;
     }
 
     pub fn deinit(self: *Self) void {
         self.arena.deinit();
+    }
+
+    fn determineBestTagPriorities(metadata: *AllMetadata, prioritization: Prioritization, tag_indexes_by_priority: []usize) void {
+        var priority_index: usize = 0;
+        for (prioritization.order) |metadata_type| {
+            const first_index = priority_index;
+            var meta_index_it = metadata.metadataOfTypeIndexIterator(metadata_type);
+            while (meta_index_it.next()) |meta_index| {
+                // For each tag of the current type, we compare backwards with all
+                // tags of the same type that have been inserted already and find
+                // its insertion point in prioritization order. We then shift things
+                // forward as needed in order to insert the current tag into the
+                // correct place.
+                var insertion_index = priority_index;
+                if (priority_index > first_index) {
+                    const meta = &metadata.tags[meta_index];
+                    var compare_index = priority_index - 1;
+                    while (compare_index >= first_index) {
+                        const compare_meta_index = tag_indexes_by_priority[compare_index];
+                        const compare_meta = &metadata.tags[compare_meta_index];
+                        if (compareTagsForPrioritization(meta, compare_meta) == .gt) {
+                            insertion_index = compare_index;
+                        }
+                        if (compare_index == 0) break;
+                        compare_index -= 1;
+                    }
+                    if (insertion_index != priority_index) {
+                        var to_shift = tag_indexes_by_priority[insertion_index..priority_index];
+                        var dest = tag_indexes_by_priority[insertion_index + 1 .. priority_index + 1];
+                        std.mem.copyBackwards(usize, dest, to_shift);
+                    }
+                }
+                tag_indexes_by_priority[insertion_index] = meta_index;
+                priority_index += 1;
+            }
+        }
+        std.debug.assert(priority_index == tag_indexes_by_priority.len);
+    }
+
+    fn determineFileOrderTagPriorities(metadata: *AllMetadata, prioritization: Prioritization, tag_indexes_by_priority: []usize, ignore_duplicates: bool) void {
+        var priority_index: usize = 0;
+        for (prioritization.order) |metadata_type| {
+            var meta_index_it = metadata.metadataOfTypeIndexIterator(metadata_type);
+            while (meta_index_it.next()) |meta_index| {
+                tag_indexes_by_priority[priority_index] = meta_index;
+                priority_index += 1;
+                if (ignore_duplicates) {
+                    break;
+                }
+            }
+        }
+        std.debug.assert(priority_index == tag_indexes_by_priority.len);
+    }
+
+    fn compareTagsForPrioritization(a: *const TypedMetadata, b: *const TypedMetadata) std.math.Order {
+        const a_count = fieldCountForPrioritization(a);
+        const b_count = fieldCountForPrioritization(b);
+        return std.math.order(a_count, b_count);
+    }
+
+    fn fieldCountForPrioritization(meta: *const TypedMetadata) usize {
+        switch (meta.*) {
+            .id3v1 => return meta.id3v1.map.entries.items.len,
+            .id3v2 => return meta.id3v2.metadata.map.entries.items.len,
+            .flac => return meta.flac.map.entries.items.len,
+            .vorbis => return meta.vorbis.map.entries.items.len,
+            .ape => return meta.ape.metadata.map.entries.items.len,
+            .mp4 => return meta.mp4.map.entries.items.len,
+        }
+    }
+
+    /// Returns a single value gotten from the tag with the highest priority,
+    /// or null if no values exist for the relevant keys in any of the tags.
+    pub fn getPrioritizedValue(self: *Self, keys: [num_metadata_types]?[]const u8) ?[]const u8 {
+        for (self.tag_indexes_by_priority) |tag_index| {
+            const tag = &self.metadata.tags[tag_index];
+            const key = keys[@enumToInt(std.meta.activeTag(tag.*))] orelse continue;
+            const value = tag.getMetadata().map.getFirst(key) orelse continue;
+            return value;
+        }
+        return null;
     }
 
     fn addValuesToSet(set: *CollatedTextSet, tag: *TypedMetadata, keys: [num_metadata_types]?[]const u8) !void {
@@ -78,8 +199,8 @@ pub const Collator = struct {
         var set = CollatedTextSet.init(self.arena.allocator());
         defer set.deinit();
 
-        for (self.prioritization.order) |meta_type| {
-            const is_last_resort = self.prioritization.priority(meta_type) == .last_resort;
+        for (self.config.prioritization.order) |meta_type| {
+            const is_last_resort = self.config.prioritization.priority(meta_type) == .last_resort;
             if (!is_last_resort or set.count() == 0) {
                 var meta_it = self.metadata.metadataOfTypeIterator(meta_type);
                 while (meta_it.next()) |meta| {
@@ -118,6 +239,29 @@ pub const Collator = struct {
 
     pub fn albums(self: *Self) ![][]const u8 {
         return self.getValuesFromKeys(album_keys);
+    }
+
+    pub fn album(self: *Self) ?[]const u8 {
+        return self.getPrioritizedValue(album_keys);
+    }
+
+    const title_keys = init: {
+        var array = [_]?[]const u8{null} ** num_metadata_types;
+        array[@enumToInt(MetadataType.id3v1)] = "title";
+        array[@enumToInt(MetadataType.flac)] = "TITLE";
+        array[@enumToInt(MetadataType.vorbis)] = "TITLE";
+        array[@enumToInt(MetadataType.id3v2)] = "TIT2";
+        array[@enumToInt(MetadataType.ape)] = "Title";
+        array[@enumToInt(MetadataType.mp4)] = "\xA9nam";
+        break :init array;
+    };
+
+    pub fn titles(self: *Self) ?[][]const u8 {
+        return self.getValuesFromKeys(title_keys);
+    }
+
+    pub fn title(self: *Self) ?[]const u8 {
+        return self.getPrioritizedValue(title_keys);
     }
 };
 
@@ -167,7 +311,7 @@ test "prioritization last resort" {
     };
     defer all.deinit();
 
-    var collator = Collator.init(allocator, &all, default_prioritization);
+    var collator = try Collator.init(allocator, &all, .{});
     defer collator.deinit();
 
     const artists = try collator.artists();
@@ -198,12 +342,124 @@ test "prioritization flac > ape" {
     };
     defer all.deinit();
 
-    var collator = Collator.init(allocator, &all, default_prioritization);
+    var collator = try Collator.init(allocator, &all, .{});
     defer collator.deinit();
 
     const artists = try collator.artists();
     try std.testing.expectEqual(@as(usize, 1), artists.len);
     try std.testing.expectEqualStrings("FlacCase", artists[0]);
+}
+
+test "prioritize_best for single values" {
+    var allocator = std.testing.allocator;
+    var metadata_buf = std.ArrayList(TypedMetadata).init(allocator);
+    defer metadata_buf.deinit();
+
+    try metadata_buf.append(TypedMetadata{ .ape = .{
+        .metadata = Metadata.init(allocator),
+        .header_or_footer = undefined,
+    } });
+    try metadata_buf.items[0].ape.metadata.map.put("Album", "ape album");
+
+    try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
+    try metadata_buf.items[1].flac.map.put("ALBUM", "bad album");
+
+    try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
+    try metadata_buf.items[2].flac.map.put("ALBUM", "good album");
+    try metadata_buf.items[2].flac.map.put("ARTIST", "artist");
+
+    try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
+    try metadata_buf.items[3].flac.map.put("ALBUM", "best album");
+    try metadata_buf.items[3].flac.map.put("ARTIST", "artist");
+    try metadata_buf.items[3].flac.map.put("TITLE", "song");
+
+    var all = AllMetadata{
+        .allocator = allocator,
+        .tags = metadata_buf.toOwnedSlice(),
+    };
+    defer all.deinit();
+
+    var collator = try Collator.init(allocator, &all, .{
+        .duplicate_tag_strategy = .prioritize_best,
+    });
+    defer collator.deinit();
+
+    const album = collator.album();
+    try std.testing.expectEqualStrings("best album", album.?);
+}
+
+test "prioritize_first for single values" {
+    var allocator = std.testing.allocator;
+    var metadata_buf = std.ArrayList(TypedMetadata).init(allocator);
+    defer metadata_buf.deinit();
+
+    try metadata_buf.append(TypedMetadata{ .ape = .{
+        .metadata = Metadata.init(allocator),
+        .header_or_footer = undefined,
+    } });
+    try metadata_buf.items[0].ape.metadata.map.put("Album", "ape album");
+
+    try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
+    try metadata_buf.items[1].flac.map.put("ALBUM", "first album");
+
+    try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
+    try metadata_buf.items[2].flac.map.put("ALBUM", "second album");
+    try metadata_buf.items[2].flac.map.put("TITLE", "title");
+
+    var all = AllMetadata{
+        .allocator = allocator,
+        .tags = metadata_buf.toOwnedSlice(),
+    };
+    defer all.deinit();
+
+    var collator = try Collator.init(allocator, &all, .{
+        .duplicate_tag_strategy = .prioritize_first,
+    });
+    defer collator.deinit();
+
+    const album = collator.album();
+    try std.testing.expectEqualStrings("first album", album.?);
+
+    // should get the title from the second FLAC tag
+    const title = collator.title();
+    try std.testing.expectEqualStrings("title", title.?);
+}
+
+test "ignore_duplicates for single values" {
+    var allocator = std.testing.allocator;
+    var metadata_buf = std.ArrayList(TypedMetadata).init(allocator);
+    defer metadata_buf.deinit();
+
+    try metadata_buf.append(TypedMetadata{ .ape = .{
+        .metadata = Metadata.init(allocator),
+        .header_or_footer = undefined,
+    } });
+    try metadata_buf.items[0].ape.metadata.map.put("Album", "ape album");
+
+    try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
+    try metadata_buf.items[1].flac.map.put("ALBUM", "first album");
+
+    try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
+    try metadata_buf.items[2].flac.map.put("ALBUM", "second album");
+    try metadata_buf.items[2].flac.map.put("TITLE", "title");
+
+    var all = AllMetadata{
+        .allocator = allocator,
+        .tags = metadata_buf.toOwnedSlice(),
+    };
+    defer all.deinit();
+
+    var collator = try Collator.init(allocator, &all, .{
+        .duplicate_tag_strategy = .ignore_duplicates,
+    });
+    defer collator.deinit();
+
+    const album = collator.album();
+    try std.testing.expectEqualStrings("first album", album.?);
+
+    // should ignore the second FLAC tag, so shouldn't find a title
+    const title = collator.title();
+    try std.testing.expect(title == null);
 }
 
 /// Set that:
