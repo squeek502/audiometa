@@ -220,6 +220,10 @@ pub const Collator = struct {
         return self.getValuesFromKeys(fields.artist);
     }
 
+    /// Using this function is discouraged, as it may return incorrect results
+    /// when the metadata contains multiple artists. It is recommended to
+    /// use `artists` instead to ensure that multiple values can be handled.
+    /// TODO: Recommend `albumArtist` as an alternative for getting a singular 'artist' value.
     pub fn artist(self: *Self) !?[]const u8 {
         return self.getPrioritizedValue(fields.artist);
     }
