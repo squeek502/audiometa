@@ -16,35 +16,37 @@ comptime {
     }
 }
 
+pub const NameLookups = [MetadataType.num_types]?[]const []const u8;
+
 pub const artist = init: {
-    var array = [_]?[]const u8{null} ** MetadataType.num_types;
-    array[@enumToInt(MetadataType.id3v1)] = "artist";
-    array[@enumToInt(MetadataType.flac)] = "ARTIST";
-    array[@enumToInt(MetadataType.vorbis)] = "ARTIST";
-    array[@enumToInt(MetadataType.id3v2)] = "TPE1";
-    array[@enumToInt(MetadataType.ape)] = "Artist";
-    array[@enumToInt(MetadataType.mp4)] = "\xA9ART";
+    var array = [_]?[]const []const u8{null} ** MetadataType.num_types;
+    array[@enumToInt(MetadataType.id3v1)] = &.{"artist"};
+    array[@enumToInt(MetadataType.flac)] = &.{"ARTIST"};
+    array[@enumToInt(MetadataType.vorbis)] = &.{"ARTIST"};
+    array[@enumToInt(MetadataType.id3v2)] = &.{ "TPE1", "TP1" };
+    array[@enumToInt(MetadataType.ape)] = &.{"Artist"};
+    array[@enumToInt(MetadataType.mp4)] = &.{"\xA9ART"};
     break :init array;
 };
 
 pub const album = init: {
-    var array = [_]?[]const u8{null} ** MetadataType.num_types;
-    array[@enumToInt(MetadataType.id3v1)] = "album";
-    array[@enumToInt(MetadataType.flac)] = "ALBUM";
-    array[@enumToInt(MetadataType.vorbis)] = "ALBUM";
-    array[@enumToInt(MetadataType.id3v2)] = "TALB";
-    array[@enumToInt(MetadataType.ape)] = "Album";
-    array[@enumToInt(MetadataType.mp4)] = "\xA9alb";
+    var array = [_]?[]const []const u8{null} ** MetadataType.num_types;
+    array[@enumToInt(MetadataType.id3v1)] = &.{"album"};
+    array[@enumToInt(MetadataType.flac)] = &.{"ALBUM"};
+    array[@enumToInt(MetadataType.vorbis)] = &.{"ALBUM"};
+    array[@enumToInt(MetadataType.id3v2)] = &.{ "TALB", "TAL" };
+    array[@enumToInt(MetadataType.ape)] = &.{"Album"};
+    array[@enumToInt(MetadataType.mp4)] = &.{"\xA9alb"};
     break :init array;
 };
 
 pub const title = init: {
-    var array = [_]?[]const u8{null} ** MetadataType.num_types;
-    array[@enumToInt(MetadataType.id3v1)] = "title";
-    array[@enumToInt(MetadataType.flac)] = "TITLE";
-    array[@enumToInt(MetadataType.vorbis)] = "TITLE";
-    array[@enumToInt(MetadataType.id3v2)] = "TIT2";
-    array[@enumToInt(MetadataType.ape)] = "Title";
-    array[@enumToInt(MetadataType.mp4)] = "\xA9nam";
+    var array = [_]?[]const []const u8{null} ** MetadataType.num_types;
+    array[@enumToInt(MetadataType.id3v1)] = &.{"title"};
+    array[@enumToInt(MetadataType.flac)] = &.{"TITLE"};
+    array[@enumToInt(MetadataType.vorbis)] = &.{"TITLE"};
+    array[@enumToInt(MetadataType.id3v2)] = &.{ "TIT2", "TT2" };
+    array[@enumToInt(MetadataType.ape)] = &.{"Title"};
+    array[@enumToInt(MetadataType.mp4)] = &.{"\xA9nam"};
     break :init array;
 };

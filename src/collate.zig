@@ -144,59 +144,63 @@ pub const Collator = struct {
 
     /// Returns a single value gotten from the tag with the highest priority,
     /// or null if no values exist for the relevant keys in any of the tags.
-    pub fn getPrioritizedValue(self: *Self, keys: [MetadataType.num_types]?[]const u8) !?[]const u8 {
+    pub fn getPrioritizedValue(self: *Self, keys: fields.NameLookups) !?[]const u8 {
         for (self.tag_indexes_by_priority) |tag_index| {
             const tag = &self.metadata.tags[tag_index];
-            const key = keys[@enumToInt(std.meta.activeTag(tag.*))] orelse continue;
-            const value = tag.getMetadata().map.getFirst(key) orelse continue;
-            const ameliorated_value = (try ameliorateCanonical(self.arena.allocator(), value)) orelse continue;
-            return ameliorated_value;
+            const tag_keys = keys[@enumToInt(std.meta.activeTag(tag.*))] orelse continue;
+            inner: for (tag_keys) |key| {
+                const value = tag.getMetadata().map.getFirst(key) orelse continue :inner;
+                const ameliorated_value = (try ameliorateCanonical(self.arena.allocator(), value)) orelse continue :inner;
+                return ameliorated_value;
+            }
         }
         return null;
     }
 
-    fn addValuesToSet(set: *CollatedTextSet, tag: *TypedMetadata, keys: [MetadataType.num_types]?[]const u8) !void {
-        const key = keys[@enumToInt(std.meta.activeTag(tag.*))] orelse return;
-        switch (tag.*) {
-            .id3v1 => |*id3v1_meta| {
-                if (id3v1_meta.map.getFirst(key)) |value| {
-                    try set.put(value);
-                }
-            },
-            .flac => |*flac_meta| {
-                var value_it = flac_meta.map.valueIterator(key);
-                while (value_it.next()) |value| {
-                    try set.put(value);
-                }
-            },
-            .vorbis => |*vorbis_meta| {
-                var value_it = vorbis_meta.map.valueIterator(key);
-                while (value_it.next()) |value| {
-                    try set.put(value);
-                }
-            },
-            .id3v2 => |*id3v2_meta| {
-                var value_it = id3v2_meta.metadata.map.valueIterator(key);
-                while (value_it.next()) |value| {
-                    try set.put(value);
-                }
-            },
-            .ape => |*ape_meta| {
-                var value_it = ape_meta.metadata.map.valueIterator(key);
-                while (value_it.next()) |value| {
-                    try set.put(value);
-                }
-            },
-            .mp4 => |*mp4_meta| {
-                var value_it = mp4_meta.map.valueIterator(key);
-                while (value_it.next()) |value| {
-                    try set.put(value);
-                }
-            },
+    fn addValuesToSet(set: *CollatedTextSet, tag: *TypedMetadata, keys: fields.NameLookups) !void {
+        const tag_keys = keys[@enumToInt(std.meta.activeTag(tag.*))] orelse return;
+        for (tag_keys) |key| {
+            switch (tag.*) {
+                .id3v1 => |*id3v1_meta| {
+                    if (id3v1_meta.map.getFirst(key)) |value| {
+                        try set.put(value);
+                    }
+                },
+                .flac => |*flac_meta| {
+                    var value_it = flac_meta.map.valueIterator(key);
+                    while (value_it.next()) |value| {
+                        try set.put(value);
+                    }
+                },
+                .vorbis => |*vorbis_meta| {
+                    var value_it = vorbis_meta.map.valueIterator(key);
+                    while (value_it.next()) |value| {
+                        try set.put(value);
+                    }
+                },
+                .id3v2 => |*id3v2_meta| {
+                    var value_it = id3v2_meta.metadata.map.valueIterator(key);
+                    while (value_it.next()) |value| {
+                        try set.put(value);
+                    }
+                },
+                .ape => |*ape_meta| {
+                    var value_it = ape_meta.metadata.map.valueIterator(key);
+                    while (value_it.next()) |value| {
+                        try set.put(value);
+                    }
+                },
+                .mp4 => |*mp4_meta| {
+                    var value_it = mp4_meta.map.valueIterator(key);
+                    while (value_it.next()) |value| {
+                        try set.put(value);
+                    }
+                },
+            }
         }
     }
 
-    pub fn getValuesFromKeys(self: *Self, keys: [MetadataType.num_types]?[]const u8) ![][]const u8 {
+    pub fn getValuesFromKeys(self: *Self, keys: fields.NameLookups) ![][]const u8 {
         var set = CollatedTextSet.init(self.arena.allocator());
         defer set.deinit();
 
@@ -214,6 +218,10 @@ pub const Collator = struct {
 
     pub fn artists(self: *Self) ![][]const u8 {
         return self.getValuesFromKeys(fields.artist);
+    }
+
+    pub fn artist(self: *Self) !?[]const u8 {
+        return self.getPrioritizedValue(fields.artist);
     }
 
     pub fn albums(self: *Self) ![][]const u8 {
@@ -255,6 +263,34 @@ pub const default_prioritization = Prioritization{
         break :init priorities;
     },
 };
+
+test "id3v2.2 frames work" {
+    var allocator = std.testing.allocator;
+    var metadata_buf = std.ArrayList(TypedMetadata).init(allocator);
+    defer metadata_buf.deinit();
+
+    try metadata_buf.append(TypedMetadata{ .id3v2 = .{
+        .metadata = Metadata.init(allocator),
+        .user_defined = metadata_namespace.MetadataMap.init(allocator),
+        .header = undefined,
+        .comments = id3v2_data.FullTextMap.init(allocator),
+        .unsynchronized_lyrics = id3v2_data.FullTextMap.init(allocator),
+    } });
+    try metadata_buf.items[0].id3v2.metadata.map.put("TP1", "test");
+
+    var all = AllMetadata{
+        .allocator = allocator,
+        .tags = metadata_buf.toOwnedSlice(),
+    };
+    defer all.deinit();
+
+    var collator = try Collator.init(allocator, &all, .{});
+    defer collator.deinit();
+
+    const artists = try collator.artists();
+    try std.testing.expectEqual(@as(usize, 1), artists.len);
+    try std.testing.expectEqualStrings("test", artists[0]);
+}
 
 test "prioritization last resort" {
     var allocator = std.testing.allocator;
