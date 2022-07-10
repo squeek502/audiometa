@@ -8,7 +8,29 @@ const invalid_character = 0x98;
 pub fn windows1251ToUtf8Alloc(allocator: Allocator, windows1251_text: []const u8) ![]u8 {
     var buffer = try std.ArrayList(u8).initCapacity(allocator, windows1251_text.len);
     errdefer buffer.deinit();
-    for (windows1251_text) |c| switch (c) {
+    for (windows1251_text) |c| {
+        try windows1251ToUtf8Append(&buffer, c);
+    }
+    return buffer.toOwnedSlice();
+}
+
+/// Does implicit UTF-8 -> Windows-1251 codepoint conversion before converting Windows-1251 -> UTF-8.
+/// UTF-8 text must be made up solely of extended ASCII codepoints (0x00...0xFF).
+/// Caller must free returned memory.
+pub fn windows1251AsUtf8ToUtf8Alloc(allocator: Allocator, windows1251_text_as_utf8: []const u8) ![]u8 {
+    var buffer = try std.ArrayList(u8).initCapacity(allocator, windows1251_text_as_utf8.len);
+    errdefer buffer.deinit();
+    var utf8_it = std.unicode.Utf8Iterator{ .bytes = windows1251_text_as_utf8, .i = 0 };
+    while (utf8_it.nextCodepoint()) |input_codepoint| {
+        // If this cast fails then the UTF-8 text has codepoints outside the extended ASCII range
+        const c = @intCast(u8, input_codepoint);
+        try windows1251ToUtf8Append(&buffer, c);
+    }
+    return buffer.toOwnedSlice();
+}
+
+fn windows1251ToUtf8Append(buffer: *std.ArrayList(u8), c: u8) !void {
+    switch (c) {
         0...127 => try buffer.append(c),
         invalid_character => return error.InvalidWindows1251Character,
         else => {
@@ -19,8 +41,7 @@ pub fn windows1251ToUtf8Alloc(allocator: Allocator, windows1251_text: []const u8
             const codepoint_size = std.unicode.utf8Encode(codepoint, codepoint_buffer) catch unreachable;
             buffer.items.len += codepoint_size;
         },
-    };
-    return buffer.toOwnedSlice();
+    }
 }
 
 /// buf must be four times as big as windows1251_text to ensure that it
@@ -53,48 +74,75 @@ pub const Windows1251DetectionThreshold = struct {
     min_cyrillic_letters: usize,
 };
 
-pub fn reachesDetectionThreshold(text: []const u8, comptime threshold: Windows1251DetectionThreshold) bool {
-    var cyrillic_streak: usize = 0;
-    var cyrillic_letters: usize = 0;
-    var found_streak: bool = false;
-    var ascii_letters: usize = 0;
-    for (text) |c| {
-        switch (c) {
-            // The invalid character being present disqualifies
-            // the text entirely
-            invalid_character => return false,
-            'a'...'z', 'A'...'Z' => {
-                cyrillic_streak = 0;
-                ascii_letters += 1;
-            },
-            // zig fmt: off
-            // these are the cyrillic characters only
-            0x80, 0x81, 0x83, 0x8A, 0x8C...0x90, 0x9A,
-            0x9C...0x9F, 0xA1...0xA3, 0xA5, 0xA8, 0xAA,
-            0xAF, 0xB2...0xB4, 0xB8, 0xBA, 0xBC...0xFF,
-            // zig fmt: on
-            => {
-                cyrillic_streak += 1;
-                cyrillic_letters += 1;
-                if (cyrillic_streak >= threshold.streak) {
-                    // We can't return early here
-                    // since we still need to validate that
-                    // the invalid character isn't present
-                    // anywhere in the text
-                    found_streak = true;
-                }
-            },
-            // control characters, punctuation, numbers, symbols, etc
-            // are irrelevant
-            else => {},
+pub fn Detector(comptime threshold: Windows1251DetectionThreshold) type {
+    return struct {
+        cyrillic_streak: usize = 0,
+        cyrillic_letters: usize = 0,
+        found_streak: bool = false,
+        ascii_letters: usize = 0,
+
+        const Self = @This();
+
+        pub fn update(self: *Self, c: u8) !void {
+            switch (c) {
+                // The invalid character being present disqualifies
+                // the text entirely
+                invalid_character => return error.InvalidWindows1251Character,
+                'a'...'z', 'A'...'Z' => {
+                    self.cyrillic_streak = 0;
+                    self.ascii_letters += 1;
+                },
+                // zig fmt: off
+                // these are the cyrillic characters only
+                0x80, 0x81, 0x83, 0x8A, 0x8C...0x90, 0x9A,
+                0x9C...0x9F, 0xA1...0xA3, 0xA5, 0xA8, 0xAA,
+                0xAF, 0xB2...0xB4, 0xB8, 0xBA, 0xBC...0xFF,
+                // zig fmt: on
+                => {
+                    self.cyrillic_streak += 1;
+                    self.cyrillic_letters += 1;
+                    if (self.cyrillic_streak >= threshold.streak) {
+                        // We can't return early here
+                        // since we still need to validate that
+                        // the invalid character isn't present
+                        // anywhere in the text
+                        self.found_streak = true;
+                    }
+                },
+                // control characters, punctuation, numbers, symbols, etc
+                // are irrelevant
+                else => {},
+            }
         }
-    }
-    const all_cyrillic = ascii_letters == 0 and cyrillic_letters >= threshold.min_cyrillic_letters;
-    return found_streak or all_cyrillic;
+
+        pub fn reachesDetectionThreshold(self: Self) bool {
+            const all_cyrillic = self.ascii_letters == 0 and self.cyrillic_letters >= threshold.min_cyrillic_letters;
+            return self.found_streak or all_cyrillic;
+        }
+    };
 }
 
+pub const DefaultDetector = Detector(.{ .streak = 4, .min_cyrillic_letters = 2 });
+
 pub fn couldBeWindows1251(text: []const u8) bool {
-    return reachesDetectionThreshold(text, .{ .streak = 4, .min_cyrillic_letters = 2 });
+    var detector = DefaultDetector{};
+    for (text) |c| {
+        detector.update(c) catch return false;
+    }
+    return detector.reachesDetectionThreshold();
+}
+
+/// UTF-8 text must be made up solely of extended ASCII codepoints (0x00...0xFF).
+pub fn couldUtf8BeWindows1251(utf8_text: []const u8) bool {
+    var detector = DefaultDetector{};
+
+    var utf8_it = std.unicode.Utf8Iterator{ .bytes = utf8_text, .i = 0 };
+    while (utf8_it.nextCodepoint()) |codepoint| {
+        // If this cast fails then the UTF-8 text has codepoints outside the extended ASCII range
+        const c = @intCast(u8, codepoint);
+        detector.update(c) catch return false;
+    }
+    return detector.reachesDetectionThreshold();
 }
 
 test "windows1251 to utf8" {
@@ -111,6 +159,14 @@ test "windows1251 to utf8 alloc" {
     try std.testing.expectEqualSlices(u8, "aаbжcпd", utf8);
 }
 
+test "windows1251 as utf8 to utf8 alloc" {
+    // The UTF-8 codepoints are the equivalent of "a\xE0b\xE6c\xEFd"
+    const utf8 = try windows1251AsUtf8ToUtf8Alloc(std.testing.allocator, "aàbæcïd");
+    defer std.testing.allocator.free(utf8);
+
+    try std.testing.expectEqualSlices(u8, "aаbжcпd", utf8);
+}
+
 test "could be windows1251" {
     try std.testing.expect(!couldBeWindows1251("abcd"));
     try std.testing.expect(!couldBeWindows1251(""));
@@ -119,6 +175,10 @@ test "could be windows1251" {
     try std.testing.expect(!couldBeWindows1251("a\xE0b\xE6c\xEFd"));
     try std.testing.expect(couldBeWindows1251("\xC8\xC8"));
     try std.testing.expect(couldBeWindows1251("abc\xC8\xC8\xE6\xEF"));
+}
+
+test "could utf8 be windows1251" {
+    try std.testing.expect(!couldUtf8BeWindows1251("Ü"));
 }
 
 // TODO: Is an array lookup better here?

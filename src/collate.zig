@@ -483,9 +483,11 @@ pub fn ameliorateCanonical(arena: Allocator, value: []const u8) !?[]const u8 {
     if (trimmed.len == 0) return null;
 
     var translated: ?[]u8 = null;
-    if (latin1.isUtf8AllLatin1(trimmed) and windows1251.couldBeWindows1251(trimmed)) {
-        const extended_ascii_str = try latin1.utf8ToLatin1Alloc(arena, trimmed);
-        translated = try windows1251.windows1251ToUtf8Alloc(arena, extended_ascii_str);
+    if (latin1.isUtf8AllLatin1(trimmed) and windows1251.couldUtf8BeWindows1251(trimmed)) {
+        translated = windows1251.windows1251AsUtf8ToUtf8Alloc(arena, trimmed) catch |err| switch (err) {
+            error.InvalidWindows1251Character => unreachable,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
     }
     return translated orelse trimmed;
 }
