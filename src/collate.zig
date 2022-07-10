@@ -144,14 +144,13 @@ pub const Collator = struct {
 
     /// Returns a single value gotten from the tag with the highest priority,
     /// or null if no values exist for the relevant keys in any of the tags.
-    pub fn getPrioritizedValue(self: *Self, keys: [MetadataType.num_types]?[]const u8) ?[]const u8 {
+    pub fn getPrioritizedValue(self: *Self, keys: [MetadataType.num_types]?[]const u8) !?[]const u8 {
         for (self.tag_indexes_by_priority) |tag_index| {
             const tag = &self.metadata.tags[tag_index];
             const key = keys[@enumToInt(std.meta.activeTag(tag.*))] orelse continue;
             const value = tag.getMetadata().map.getFirst(key) orelse continue;
-            // TODO: Need to do trimming, character encoding conversions, etc here
-            //       (see CollatedTextSet)
-            return value;
+            const ameliorated_value = (try ameliorateCanonical(self.arena.allocator(), value)) orelse continue;
+            return ameliorated_value;
         }
         return null;
     }
@@ -221,15 +220,15 @@ pub const Collator = struct {
         return self.getValuesFromKeys(fields.album);
     }
 
-    pub fn album(self: *Self) ?[]const u8 {
+    pub fn album(self: *Self) !?[]const u8 {
         return self.getPrioritizedValue(fields.album);
     }
 
-    pub fn titles(self: *Self) ?[][]const u8 {
+    pub fn titles(self: *Self) ![][]const u8 {
         return self.getValuesFromKeys(fields.title);
     }
 
-    pub fn title(self: *Self) ?[]const u8 {
+    pub fn title(self: *Self) !?[]const u8 {
         return self.getPrioritizedValue(fields.title);
     }
 };
@@ -353,7 +352,7 @@ test "prioritize_best for single values" {
     });
     defer collator.deinit();
 
-    const album = collator.album();
+    const album = try collator.album();
     try std.testing.expectEqualStrings("best album", album.?);
 }
 
@@ -373,7 +372,7 @@ test "prioritize_first for single values" {
 
     try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
     try metadata_buf.items[2].flac.map.put("ALBUM", "second album");
-    try metadata_buf.items[2].flac.map.put("TITLE", "title");
+    try metadata_buf.items[2].flac.map.put("TITLE", "title  "); // extra spaces at the end to test trimming
 
     var all = AllMetadata{
         .allocator = allocator,
@@ -386,11 +385,11 @@ test "prioritize_first for single values" {
     });
     defer collator.deinit();
 
-    const album = collator.album();
+    const album = try collator.album();
     try std.testing.expectEqualStrings("first album", album.?);
 
     // should get the title from the second FLAC tag
-    const title = collator.title();
+    const title = try collator.title();
     try std.testing.expectEqualStrings("title", title.?);
 }
 
@@ -423,17 +422,47 @@ test "ignore_duplicates for single values" {
     });
     defer collator.deinit();
 
-    const album = collator.album();
+    const album = try collator.album();
     try std.testing.expectEqualStrings("first album", album.?);
 
     // should ignore the second FLAC tag, so shouldn't find a title
-    const title = collator.title();
+    const title = try collator.title();
     try std.testing.expect(title == null);
 }
 
-/// Set that:
+/// Function that:
 /// - Trims spaces and NUL from both sides of inputs
 /// - Converts inputs to inferred character encodings (e.g. Windows-1251)
+///
+/// Returns null if the ameliorated value becomes empty.
+///
+/// Note: Return value may or may not be allocated by the allocator, this API basically
+///       assumes that you pass an arena allocator.
+pub fn ameliorateCanonical(arena: Allocator, value: []const u8) !?[]const u8 {
+    const trimmed = std.mem.trim(u8, value, " \x00");
+    if (trimmed.len == 0) return null;
+
+    var translated: ?[]u8 = null;
+    if (latin1.isUtf8AllLatin1(trimmed) and windows1251.couldBeWindows1251(trimmed)) {
+        const extended_ascii_str = try latin1.utf8ToLatin1Alloc(arena, trimmed);
+        translated = try windows1251.windows1251ToUtf8Alloc(arena, extended_ascii_str);
+    }
+    return translated orelse trimmed;
+}
+
+test "ameliorateCanonical" {
+    var arena_allocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
+    try std.testing.expectEqual(@as(?[]const u8, null), try ameliorateCanonical(arena, " \x00 "));
+    try std.testing.expectEqualStrings("trimmed", (try ameliorateCanonical(arena, "trimmed \x00")).?);
+    // Note: the Latin-1 bytes here are "\xC0\xEF\xEE\xF1\xF2\xF0\xEE\xF4"
+    try std.testing.expectEqualStrings("Апостроф", (try ameliorateCanonical(arena, "Àïîñòðîô")).?);
+}
+
+/// Set that:
+/// - Runs the inputs through ameliorateCanonical
 /// - De-duplicates via UTF-8 normalization and case normalization
 /// - Ignores empty values
 ///
@@ -466,15 +495,8 @@ const CollatedTextSet = struct {
     }
 
     pub fn put(self: *Self, value: []const u8) !void {
-        const trimmed = std.mem.trim(u8, value, " \x00");
-        if (trimmed.len == 0) return;
-
-        var translated: ?[]u8 = null;
-        if (latin1.isUtf8AllLatin1(trimmed) and windows1251.couldBeWindows1251(trimmed)) {
-            const extended_ascii_str = try latin1.utf8ToLatin1Alloc(self.arena, trimmed);
-            translated = try windows1251.windows1251ToUtf8Alloc(self.arena, extended_ascii_str);
-        }
-        const lowered = try ziglyph.toCaseFoldStr(self.arena, translated orelse trimmed);
+        const ameliorated_canonical = (try ameliorateCanonical(self.arena, value)) orelse return;
+        const lowered = try ziglyph.toCaseFoldStr(self.arena, ameliorated_canonical);
 
         var normalizer = try ziglyph.Normalizer.init(self.arena);
         defer normalizer.deinit();
@@ -490,7 +512,7 @@ const CollatedTextSet = struct {
             result.key_ptr.* = try self.arena.dupe(u8, normalized);
 
             const index = self.values.items.len;
-            try self.values.append(self.arena, translated orelse trimmed);
+            try self.values.append(self.arena, ameliorated_canonical);
             result.value_ptr.* = index;
         }
     }
