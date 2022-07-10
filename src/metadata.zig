@@ -216,6 +216,8 @@ pub const MetadataType = enum {
     flac,
     vorbis,
     mp4,
+
+    pub const num_types = @typeInfo(MetadataType).Enum.fields.len;
 };
 
 pub const TypedMetadata = union(MetadataType) {

@@ -9,8 +9,7 @@ const id3v2_data = @import("id3v2_data.zig");
 const ziglyph = @import("ziglyph");
 const windows1251 = @import("windows1251.zig");
 const latin1 = @import("latin1.zig");
-
-pub const num_metadata_types = @typeInfo(MetadataType).Enum.fields.len;
+const fields = @import("fields.zig");
 
 pub const Collator = struct {
     metadata: *AllMetadata,
@@ -144,17 +143,19 @@ pub const Collator = struct {
 
     /// Returns a single value gotten from the tag with the highest priority,
     /// or null if no values exist for the relevant keys in any of the tags.
-    pub fn getPrioritizedValue(self: *Self, keys: [num_metadata_types]?[]const u8) ?[]const u8 {
+    pub fn getPrioritizedValue(self: *Self, keys: [MetadataType.num_types]?[]const u8) ?[]const u8 {
         for (self.tag_indexes_by_priority) |tag_index| {
             const tag = &self.metadata.tags[tag_index];
             const key = keys[@enumToInt(std.meta.activeTag(tag.*))] orelse continue;
             const value = tag.getMetadata().map.getFirst(key) orelse continue;
+            // TODO: Need to do trimming, character encoding conversions, etc here
+            //       (see CollatedTextSet)
             return value;
         }
         return null;
     }
 
-    fn addValuesToSet(set: *CollatedTextSet, tag: *TypedMetadata, keys: [num_metadata_types]?[]const u8) !void {
+    fn addValuesToSet(set: *CollatedTextSet, tag: *TypedMetadata, keys: [MetadataType.num_types]?[]const u8) !void {
         const key = keys[@enumToInt(std.meta.activeTag(tag.*))] orelse return;
         switch (tag.*) {
             .id3v1 => |*id3v1_meta| {
@@ -195,7 +196,7 @@ pub const Collator = struct {
         }
     }
 
-    pub fn getValuesFromKeys(self: *Self, keys: [num_metadata_types]?[]const u8) ![][]const u8 {
+    pub fn getValuesFromKeys(self: *Self, keys: [MetadataType.num_types]?[]const u8) ![][]const u8 {
         var set = CollatedTextSet.init(self.arena.allocator());
         defer set.deinit();
 
@@ -211,63 +212,30 @@ pub const Collator = struct {
         return try self.arena.allocator().dupe([]const u8, set.values.items);
     }
 
-    const artist_keys = init: {
-        var array = [_]?[]const u8{null} ** num_metadata_types;
-        array[@enumToInt(MetadataType.id3v1)] = "artist";
-        array[@enumToInt(MetadataType.flac)] = "ARTIST";
-        array[@enumToInt(MetadataType.vorbis)] = "ARTIST";
-        array[@enumToInt(MetadataType.id3v2)] = "TPE1";
-        array[@enumToInt(MetadataType.ape)] = "Artist";
-        array[@enumToInt(MetadataType.mp4)] = "\xA9ART";
-        break :init array;
-    };
-
     pub fn artists(self: *Self) ![][]const u8 {
-        return self.getValuesFromKeys(artist_keys);
+        return self.getValuesFromKeys(fields.artist);
     }
 
-    const album_keys = init: {
-        var array = [_]?[]const u8{null} ** num_metadata_types;
-        array[@enumToInt(MetadataType.id3v1)] = "album";
-        array[@enumToInt(MetadataType.flac)] = "ALBUM";
-        array[@enumToInt(MetadataType.vorbis)] = "ALBUM";
-        array[@enumToInt(MetadataType.id3v2)] = "TALB";
-        array[@enumToInt(MetadataType.ape)] = "Album";
-        array[@enumToInt(MetadataType.mp4)] = "\xA9alb";
-        break :init array;
-    };
-
     pub fn albums(self: *Self) ![][]const u8 {
-        return self.getValuesFromKeys(album_keys);
+        return self.getValuesFromKeys(fields.album);
     }
 
     pub fn album(self: *Self) ?[]const u8 {
-        return self.getPrioritizedValue(album_keys);
+        return self.getPrioritizedValue(fields.album);
     }
 
-    const title_keys = init: {
-        var array = [_]?[]const u8{null} ** num_metadata_types;
-        array[@enumToInt(MetadataType.id3v1)] = "title";
-        array[@enumToInt(MetadataType.flac)] = "TITLE";
-        array[@enumToInt(MetadataType.vorbis)] = "TITLE";
-        array[@enumToInt(MetadataType.id3v2)] = "TIT2";
-        array[@enumToInt(MetadataType.ape)] = "Title";
-        array[@enumToInt(MetadataType.mp4)] = "\xA9nam";
-        break :init array;
-    };
-
     pub fn titles(self: *Self) ?[][]const u8 {
-        return self.getValuesFromKeys(title_keys);
+        return self.getValuesFromKeys(fields.title);
     }
 
     pub fn title(self: *Self) ?[]const u8 {
-        return self.getPrioritizedValue(title_keys);
+        return self.getPrioritizedValue(fields.title);
     }
 };
 
 pub const Prioritization = struct {
-    order: [num_metadata_types]MetadataType,
-    priorities: [num_metadata_types]Priority,
+    order: [MetadataType.num_types]MetadataType,
+    priorities: [MetadataType.num_types]Priority,
 
     pub const Priority = enum {
         normal,
@@ -282,7 +250,7 @@ pub const Prioritization = struct {
 pub const default_prioritization = Prioritization{
     .order = [_]MetadataType{ .mp4, .flac, .vorbis, .id3v2, .ape, .id3v1 },
     .priorities = init: {
-        var priorities = [_]Prioritization.Priority{.normal} ** num_metadata_types;
+        var priorities = [_]Prioritization.Priority{.normal} ** MetadataType.num_types;
         priorities[@enumToInt(MetadataType.id3v1)] = .last_resort;
         break :init priorities;
     },
