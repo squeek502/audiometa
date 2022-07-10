@@ -25,7 +25,8 @@ pub const Collator = struct {
         duplicate_tag_strategy: DuplicateTagStrategy = .prioritize_best,
 
         pub const DuplicateTagStrategy = enum {
-            /// Use a heuristic to select the 'best' tag for any tag types with multiple tags.
+            /// Use a heuristic to prioritize the 'best' tag for any tag types with multiple tags,
+            /// and fall back to second best, etc.
             ///
             /// TODO: Improve the heuristic; right now it uses largest number of fields in the tag.
             prioritize_best,
@@ -57,12 +58,12 @@ pub const Collator = struct {
             },
             .prioritize_first => {
                 collator.tag_indexes_by_priority = try collator.arena.allocator().alloc(usize, metadata.tags.len);
-                determineFileOrderTagPriorities(metadata, config.prioritization, collator.tag_indexes_by_priority, false);
+                determineFileOrderTagPriorities(metadata, config.prioritization, collator.tag_indexes_by_priority, .include_duplicates);
             },
             .ignore_duplicates => {
                 const count_ignoring_duplicates = metadata.countIgnoringDuplicates();
                 collator.tag_indexes_by_priority = try collator.arena.allocator().alloc(usize, count_ignoring_duplicates);
-                determineFileOrderTagPriorities(metadata, config.prioritization, collator.tag_indexes_by_priority, true);
+                determineFileOrderTagPriorities(metadata, config.prioritization, collator.tag_indexes_by_priority, .ignore_duplicates);
             },
         }
         return collator;
@@ -109,14 +110,14 @@ pub const Collator = struct {
         std.debug.assert(priority_index == tag_indexes_by_priority.len);
     }
 
-    fn determineFileOrderTagPriorities(metadata: *AllMetadata, prioritization: Prioritization, tag_indexes_by_priority: []usize, ignore_duplicates: bool) void {
+    fn determineFileOrderTagPriorities(metadata: *AllMetadata, prioritization: Prioritization, tag_indexes_by_priority: []usize, duplicate_handling: enum { include_duplicates, ignore_duplicates }) void {
         var priority_index: usize = 0;
         for (prioritization.order) |metadata_type| {
             var meta_index_it = metadata.metadataOfTypeIndexIterator(metadata_type);
             while (meta_index_it.next()) |meta_index| {
                 tag_indexes_by_priority[priority_index] = meta_index;
                 priority_index += 1;
-                if (ignore_duplicates) {
+                if (duplicate_handling == .ignore_duplicates) {
                     break;
                 }
             }
