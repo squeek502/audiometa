@@ -138,8 +138,8 @@ pub fn couldUtf8BeWindows1251(utf8_text: []const u8) bool {
 
     var utf8_it = std.unicode.Utf8Iterator{ .bytes = utf8_text, .i = 0 };
     while (utf8_it.nextCodepoint()) |codepoint| {
-        // If this cast fails then the UTF-8 text has codepoints outside the extended ASCII range
-        const c = @intCast(u8, codepoint);
+        // Ensure that the codepoint is within the Latin-1 range
+        const c = std.math.cast(u8, codepoint) orelse return false;
         detector.update(c) catch return false;
     }
     return detector.reachesDetectionThreshold();

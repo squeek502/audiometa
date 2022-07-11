@@ -483,7 +483,7 @@ pub fn ameliorateCanonical(arena: Allocator, value: []const u8) !?[]const u8 {
     if (trimmed.len == 0) return null;
 
     var translated: ?[]u8 = null;
-    if (latin1.isUtf8AllLatin1(trimmed) and windows1251.couldUtf8BeWindows1251(trimmed)) {
+    if (windows1251.couldUtf8BeWindows1251(trimmed)) {
         translated = windows1251.windows1251AsUtf8ToUtf8Alloc(arena, trimmed) catch |err| switch (err) {
             error.InvalidWindows1251Character => unreachable,
             error.OutOfMemory => return error.OutOfMemory,
