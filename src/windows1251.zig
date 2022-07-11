@@ -122,7 +122,7 @@ pub fn Detector(comptime threshold: Windows1251DetectionThreshold) type {
     };
 }
 
-pub const DefaultDetector = Detector(.{ .streak = 4, .min_cyrillic_letters = 2 });
+pub const DefaultDetector = Detector(.{ .streak = 4, .min_cyrillic_letters = 4 });
 
 pub fn couldBeWindows1251(text: []const u8) bool {
     var detector = DefaultDetector{};
