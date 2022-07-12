@@ -270,7 +270,7 @@ pub const Collator = struct {
 
     fn parseNumberDisallowingZero(comptime T: type, number_as_string: ?[]const u8) ?T {
         const number: ?T = if (number_as_string != null)
-            (std.fmt.parseUnsigned(u32, number_as_string.?, 10) catch null)
+            (std.fmt.parseUnsigned(T, number_as_string.?, 10) catch null)
         else
             null;
         if (number != null and number.? == 0) return null;
