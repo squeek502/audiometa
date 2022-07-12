@@ -173,7 +173,7 @@ test "could be windows1251" {
     try std.testing.expect(!couldBeWindows1251("abc\xC8\xC8"));
     try std.testing.expect(!couldBeWindows1251("\xC8\xC8\xC8\xC8\x98"));
     try std.testing.expect(!couldBeWindows1251("a\xE0b\xE6c\xEFd"));
-    try std.testing.expect(couldBeWindows1251("\xC8\xC8"));
+    try std.testing.expect(couldBeWindows1251("\xC8\xC8\xC8\xC8"));
     try std.testing.expect(couldBeWindows1251("abc\xC8\xC8\xE6\xEF"));
 }
 
