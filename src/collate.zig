@@ -261,11 +261,20 @@ pub const Collator = struct {
             const maybe_track_total_as_string = try self.getPrioritizedValue(fields.track_total);
             from_track_total: {
                 var as_string = maybe_track_total_as_string orelse break :from_track_total;
-                track_number.total = std.fmt.parseUnsigned(u32, as_string, 10) catch null;
+                track_number.total = parseNumberDisallowingZero(u32, as_string);
             }
         }
 
         return track_number;
+    }
+
+    fn parseNumberDisallowingZero(comptime T: type, number_as_string: ?[]const u8) ?T {
+        const number: ?T = if (number_as_string != null)
+            (std.fmt.parseUnsigned(u32, number_as_string.?, 10) catch null)
+        else
+            null;
+        if (number != null and number.? == 0) return null;
+        return number;
     }
 
     fn splitTrackNumber(as_string: []const u8) TrackNumber {
@@ -273,16 +282,10 @@ pub const Collator = struct {
         var split_it = std.mem.split(u8, as_string, "/");
 
         const number_str = split_it.next();
-        track_number.number = if (number_str != null)
-            (std.fmt.parseUnsigned(u32, number_str.?, 10) catch null)
-        else
-            null;
+        track_number.number = parseNumberDisallowingZero(u32, number_str);
 
         const total_str = split_it.next();
-        track_number.total = if (total_str != null)
-            (std.fmt.parseUnsigned(u32, total_str.?, 10) catch null)
-        else
-            null;
+        track_number.total = parseNumberDisallowingZero(u32, total_str);
 
         return track_number;
     }
@@ -327,7 +330,7 @@ pub const Collator = struct {
                     for (tag_keys) |key| {
                         var value_it = meta.getMetadata().map.valueIterator(key);
                         while (value_it.next()) |track_total_as_string| {
-                            const maybe_total: ?u32 = std.fmt.parseUnsigned(u32, track_total_as_string, 10) catch null;
+                            const maybe_total: ?u32 = parseNumberDisallowingZero(u32, track_total_as_string);
                             if (maybe_total) |total| {
                                 try track_total_set.put(self.allocator, total, {});
                             }
@@ -588,7 +591,9 @@ test "track numbers" {
 
     try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
     try metadata_buf.items[2].flac.map.put("TRACKTOTAL", "5");
+    try metadata_buf.items[2].flac.map.put("TRACKTOTAL", "0"); // should be ignored
     try metadata_buf.items[2].flac.map.put("TRACKNUMBER", "5");
+    try metadata_buf.items[2].flac.map.put("TRACKNUMBER", "0"); // should be ignored
 
     var all = AllMetadata{
         .allocator = allocator,
