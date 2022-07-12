@@ -213,11 +213,7 @@ test "music folder" {
         if (buggy_files.has(entry.path)) continue;
 
         const extension = std.fs.path.extension(entry.basename);
-        const is_mp3 = std.ascii.eqlIgnoreCase(extension, ".mp3");
-        const is_flac = std.ascii.eqlIgnoreCase(extension, ".flac");
-        const is_m4a = std.ascii.eqlIgnoreCase(extension, ".m4a");
-        const readable = is_mp3 or is_flac or is_m4a;
-        if (!readable) continue;
+        if (!audiometa.metadata.isReleventFileExtension(extension)) continue;
 
         std.debug.print("\n{s}\n", .{fmtUtf8SliceEscapeUpper(entry.path)});
 

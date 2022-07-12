@@ -14,6 +14,15 @@ const Timer = time.Timer;
 
 var timer: Timer = undefined;
 
+pub fn isReleventFileExtension(extension: []const u8) bool {
+    const is_mp3 = std.ascii.eqlIgnoreCase(extension, ".mp3");
+    const is_flac = std.ascii.eqlIgnoreCase(extension, ".flac");
+    const is_ogg = std.ascii.eqlIgnoreCase(extension, ".ogg");
+    const is_m4a = std.ascii.eqlIgnoreCase(extension, ".m4a");
+    const is_mp4 = std.ascii.eqlIgnoreCase(extension, ".mp4");
+    return is_mp3 or is_flac or is_ogg or is_m4a or is_mp4;
+}
+
 pub fn readAll(allocator: Allocator, stream_source: *std.io.StreamSource) !AllMetadata {
     timer = try Timer.start();
 
