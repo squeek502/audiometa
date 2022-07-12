@@ -634,6 +634,14 @@ fn compareMetadata(allocator: Allocator, all_expected: *AllMetadata, all_actual:
                 const actual_flac = maybe_actual_flac.?;
                 try compareMetadataMapFLAC(&expected_tag.getMetadata().map, &actual_flac.map);
             },
+            .vorbis => {
+                const maybe_actual_vorbis = all_actual.getFirstMetadataOfType(.vorbis);
+                if (maybe_actual_vorbis == null) {
+                    return error.MissingVorbis;
+                }
+                const actual_vorbis = maybe_actual_vorbis.?;
+                try compareMetadataMapFLAC(&expected_tag.getMetadata().map, &actual_vorbis.map);
+            },
             .mp4 => {
                 const maybe_actual_mp4 = all_actual.getFirstMetadataOfType(.mp4);
                 if (maybe_actual_mp4 == null) {
@@ -782,6 +790,40 @@ fn getTagLibMetadata(allocator: Allocator, cwd: ?std.fs.Dir, filepath: []const u
         }
     }
 
+    var vorbis_metadata: ?Metadata = null;
+    errdefer if (vorbis_metadata != null) vorbis_metadata.?.deinit();
+
+    const vorbis_start_string = "Vorbis:::::::::\n";
+    const maybe_vorbis_start = std.mem.indexOf(u8, result.stdout, vorbis_start_string);
+    if (maybe_vorbis_start) |vorbis_start| {
+        const vorbis_data_start = vorbis_start + vorbis_start_string.len;
+        var vorbis_data = result.stdout[vorbis_data_start..];
+
+        vorbis_metadata = Metadata.init(allocator);
+
+        while (true) {
+            var equals_index = std.mem.indexOfScalar(u8, vorbis_data, '=') orelse break;
+            var name = vorbis_data[0..equals_index];
+            const value_start_index = equals_index + 1;
+            const start_value_string = "[====[";
+            var start_quote_index = std.mem.indexOf(u8, vorbis_data[value_start_index..], start_value_string) orelse break;
+            const abs_after_start_quote_index = value_start_index + start_quote_index + start_value_string.len;
+            const end_value_string = "]====]";
+            var end_quote_index = std.mem.indexOf(u8, vorbis_data[abs_after_start_quote_index..], end_value_string) orelse break;
+            const abs_end_quote_index = abs_after_start_quote_index + end_quote_index;
+            var value = vorbis_data[abs_after_start_quote_index..abs_end_quote_index];
+
+            try vorbis_metadata.?.map.put(name, value);
+
+            var after_linebreaks = abs_end_quote_index + end_value_string.len;
+            while (after_linebreaks < vorbis_data.len and vorbis_data[after_linebreaks] == '\n') {
+                after_linebreaks += 1;
+            }
+
+            vorbis_data = vorbis_data[after_linebreaks..];
+        }
+    }
+
     var mp4_metadata: ?Metadata = null;
     errdefer if (mp4_metadata != null) mp4_metadata.?.deinit();
 
@@ -820,6 +862,7 @@ fn getTagLibMetadata(allocator: Allocator, cwd: ?std.fs.Dir, filepath: []const u
     if (id3v2_metadata != null) count += 1;
     if (flac_metadata != null) count += 1;
     if (mp4_metadata != null) count += 1;
+    if (vorbis_metadata != null) count += 1;
 
     var tags_slice = try allocator.alloc(TypedMetadata, count);
     errdefer allocator.free(tags_slice);
@@ -831,6 +874,10 @@ fn getTagLibMetadata(allocator: Allocator, cwd: ?std.fs.Dir, filepath: []const u
     }
     if (flac_metadata) |val| {
         tags_slice[tag_index] = .{ .flac = val };
+        tag_index += 1;
+    }
+    if (vorbis_metadata) |val| {
+        tags_slice[tag_index] = .{ .vorbis = val };
         tag_index += 1;
     }
     if (mp4_metadata) |val| {
