@@ -243,6 +243,108 @@ pub const Collator = struct {
     pub fn title(self: *Self) !?[]const u8 {
         return self.getPrioritizedValue(fields.title);
     }
+
+    pub const TrackNumber = struct {
+        number: ?u32,
+        total: ?u32,
+    };
+
+    pub fn trackNumber(self: *Self) !TrackNumber {
+        const maybe_track_number_as_string = try self.getPrioritizedValue(fields.track_number);
+        var track_number = TrackNumber{ .number = null, .total = null };
+        from_track_number: {
+            var as_string = maybe_track_number_as_string orelse break :from_track_number;
+            track_number = splitTrackNumber(as_string);
+        }
+
+        if (track_number.total == null) {
+            const maybe_track_total_as_string = try self.getPrioritizedValue(fields.track_total);
+            from_track_total: {
+                var as_string = maybe_track_total_as_string orelse break :from_track_total;
+                track_number.total = std.fmt.parseUnsigned(u32, as_string, 10) catch null;
+            }
+        }
+
+        return track_number;
+    }
+
+    fn splitTrackNumber(as_string: []const u8) TrackNumber {
+        var track_number: TrackNumber = undefined;
+        var split_it = std.mem.split(u8, as_string, "/");
+
+        const number_str = split_it.next();
+        track_number.number = if (number_str != null)
+            (std.fmt.parseUnsigned(u32, number_str.?, 10) catch null)
+        else
+            null;
+
+        const total_str = split_it.next();
+        track_number.total = if (total_str != null)
+            (std.fmt.parseUnsigned(u32, total_str.?, 10) catch null)
+        else
+            null;
+
+        return track_number;
+    }
+
+    pub const TrackNumbers = struct {
+        numbers: []u32,
+        totals: []u32,
+    };
+
+    pub fn trackNumbers(self: *Self) !TrackNumbers {
+        var track_number_set = std.AutoArrayHashMapUnmanaged(u32, void){};
+        defer track_number_set.deinit(self.allocator);
+        var track_total_set = std.AutoArrayHashMapUnmanaged(u32, void){};
+        defer track_total_set.deinit(self.allocator);
+
+        for (self.config.prioritization.order) |meta_type| {
+            const is_last_resort = self.config.prioritization.priority(meta_type) == .last_resort;
+
+            var meta_it = self.metadata.metadataOfTypeIterator(meta_type);
+            while (meta_it.next()) |meta| {
+                track_numbers: {
+                    if (is_last_resort and track_number_set.count() != 0) break :track_numbers;
+
+                    const tag_keys = fields.track_number[@enumToInt(meta_type)] orelse break :track_numbers;
+                    for (tag_keys) |key| {
+                        var value_it = meta.getMetadata().map.valueIterator(key);
+                        while (value_it.next()) |track_number_as_string| {
+                            const track_number = splitTrackNumber(track_number_as_string);
+                            if (track_number.number) |number| {
+                                try track_number_set.put(self.allocator, number, {});
+                            }
+                            if (track_number.total) |total| {
+                                try track_total_set.put(self.allocator, total, {});
+                            }
+                        }
+                    }
+                }
+                track_totals: {
+                    if (is_last_resort and track_total_set.count() != 0) break :track_totals;
+
+                    const tag_keys = fields.track_total[@enumToInt(meta_type)] orelse break :track_totals;
+                    for (tag_keys) |key| {
+                        var value_it = meta.getMetadata().map.valueIterator(key);
+                        while (value_it.next()) |track_total_as_string| {
+                            const maybe_total: ?u32 = std.fmt.parseUnsigned(u32, track_total_as_string, 10) catch null;
+                            if (maybe_total) |total| {
+                                try track_total_set.put(self.allocator, total, {});
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        var numbers = try self.arena.allocator().dupe(u32, track_number_set.keys());
+        var totals = try self.arena.allocator().dupe(u32, track_total_set.keys());
+
+        return TrackNumbers{
+            .numbers = numbers,
+            .totals = totals,
+        };
+    }
 };
 
 pub const Prioritization = struct {
@@ -468,6 +570,45 @@ test "ignore_duplicates for single values" {
     // should ignore the second FLAC tag, so shouldn't find a title
     const title = try collator.title();
     try std.testing.expect(title == null);
+}
+
+test "track numbers" {
+    var allocator = std.testing.allocator;
+    var metadata_buf = std.ArrayList(TypedMetadata).init(allocator);
+    defer metadata_buf.deinit();
+
+    try metadata_buf.append(TypedMetadata{ .ape = .{
+        .metadata = Metadata.init(allocator),
+        .header_or_footer = undefined,
+    } });
+    try metadata_buf.items[0].ape.metadata.map.put("Track", "5/15");
+
+    try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
+    try metadata_buf.items[1].flac.map.put("TRACKNUMBER", "1");
+
+    try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
+    try metadata_buf.items[2].flac.map.put("TRACKTOTAL", "5");
+    try metadata_buf.items[2].flac.map.put("TRACKNUMBER", "5");
+
+    var all = AllMetadata{
+        .allocator = allocator,
+        .tags = metadata_buf.toOwnedSlice(),
+    };
+    defer all.deinit();
+
+    var collator = try Collator.init(allocator, &all, .{
+        .duplicate_tag_strategy = .prioritize_first,
+    });
+    defer collator.deinit();
+
+    const track_numbers = try collator.trackNumbers();
+    try std.testing.expectEqual(@as(usize, 2), track_numbers.numbers.len);
+    try std.testing.expectEqual(@as(u32, 1), track_numbers.numbers[0]);
+    try std.testing.expectEqual(@as(u32, 5), track_numbers.numbers[1]);
+
+    try std.testing.expectEqual(@as(usize, 2), track_numbers.totals.len);
+    try std.testing.expectEqual(@as(u32, 5), track_numbers.totals[0]);
+    try std.testing.expectEqual(@as(u32, 15), track_numbers.totals[1]);
 }
 
 /// Function that:

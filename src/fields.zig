@@ -50,3 +50,25 @@ pub const title = init: {
     array[@enumToInt(MetadataType.mp4)] = &.{"\xA9nam"};
     break :init array;
 };
+
+/// These can include either just the track number or be of the format
+/// <track number>/<total tracks>
+pub const track_number = init: {
+    var array = [_]?[]const []const u8{null} ** MetadataType.num_types;
+    array[@enumToInt(MetadataType.id3v1)] = &.{"track"};
+    array[@enumToInt(MetadataType.flac)] = &.{"TRACKNUMBER"};
+    array[@enumToInt(MetadataType.vorbis)] = &.{"TRACKNUMBER"};
+    array[@enumToInt(MetadataType.id3v2)] = &.{ "TRCK", "TRK" };
+    array[@enumToInt(MetadataType.ape)] = &.{"Track"};
+    array[@enumToInt(MetadataType.mp4)] = &.{"trkn"};
+    break :init array;
+};
+
+/// Only includes tag types that specify the total track count in a separate field from
+/// the track number
+pub const track_total = init: {
+    var array = [_]?[]const []const u8{null} ** MetadataType.num_types;
+    array[@enumToInt(MetadataType.flac)] = &.{ "TRACKTOTAL", "TOTALTRACKS" };
+    array[@enumToInt(MetadataType.vorbis)] = &.{ "TRACKTOTAL", "TOTALTRACKS" };
+    break :init array;
+};
