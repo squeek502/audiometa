@@ -373,24 +373,63 @@ pub const default_prioritization = Prioritization{
     },
 };
 
-test "id3v2.2 frames work" {
-    var allocator = std.testing.allocator;
+fn buildMetadata(allocator: Allocator, comptime types: []const MetadataType, comptime values: anytype) !AllMetadata {
     var metadata_buf = std.ArrayList(TypedMetadata).init(allocator);
     defer metadata_buf.deinit();
 
-    try metadata_buf.append(TypedMetadata{ .id3v2 = .{
-        .metadata = Metadata.init(allocator),
-        .user_defined = metadata_namespace.MetadataMap.init(allocator),
-        .header = undefined,
-        .comments = id3v2_data.FullTextMap.init(allocator),
-        .unsynchronized_lyrics = id3v2_data.FullTextMap.init(allocator),
-    } });
-    try metadata_buf.items[0].id3v2.metadata.map.put("TP1", "test");
+    inline for (types) |meta_type, i| {
+        switch (meta_type) {
+            .id3v2 => {
+                try metadata_buf.append(TypedMetadata{ .id3v2 = .{
+                    .metadata = Metadata.init(allocator),
+                    .user_defined = metadata_namespace.MetadataMap.init(allocator),
+                    .header = undefined,
+                    .comments = id3v2_data.FullTextMap.init(allocator),
+                    .unsynchronized_lyrics = id3v2_data.FullTextMap.init(allocator),
+                } });
+            },
+            .id3v1 => {
+                try metadata_buf.append(TypedMetadata{ .id3v1 = Metadata.init(allocator) });
+            },
+            .ape => {
+                try metadata_buf.append(TypedMetadata{ .ape = .{
+                    .metadata = Metadata.init(allocator),
+                    .header_or_footer = undefined,
+                } });
+            },
+            .flac => {
+                try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
+            },
+            .mp4 => {
+                try metadata_buf.append(TypedMetadata{ .mp4 = Metadata.init(allocator) });
+            },
+            .vorbis => {
+                try metadata_buf.append(TypedMetadata{ .vorbis = Metadata.init(allocator) });
+            },
+        }
+        const tag_values = values[i];
+        inline for (tag_values) |entry| {
+            try metadata_buf.items[i].getMetadataPtr().map.put(entry[0], entry[1]);
+        }
+    }
 
-    var all = AllMetadata{
+    return AllMetadata{
         .allocator = allocator,
         .tags = metadata_buf.toOwnedSlice(),
     };
+}
+
+test "id3v2.2 frames work" {
+    var allocator = std.testing.allocator;
+    var all = try buildMetadata(
+        allocator,
+        &[_]MetadataType{
+            .id3v2,
+        },
+        .{
+            .{.{ "TP1", "test" }},
+        },
+    );
     defer all.deinit();
 
     var collator = try Collator.init(allocator, &all, .{});
@@ -403,25 +442,17 @@ test "id3v2.2 frames work" {
 
 test "prioritization last resort" {
     var allocator = std.testing.allocator;
-    var metadata_buf = std.ArrayList(TypedMetadata).init(allocator);
-    defer metadata_buf.deinit();
-
-    try metadata_buf.append(TypedMetadata{ .id3v2 = .{
-        .metadata = Metadata.init(allocator),
-        .user_defined = metadata_namespace.MetadataMap.init(allocator),
-        .header = undefined,
-        .comments = id3v2_data.FullTextMap.init(allocator),
-        .unsynchronized_lyrics = id3v2_data.FullTextMap.init(allocator),
-    } });
-    try metadata_buf.items[0].id3v2.metadata.map.put("TPE1", "test");
-
-    try metadata_buf.append(TypedMetadata{ .id3v1 = Metadata.init(allocator) });
-    try metadata_buf.items[1].id3v1.map.put("artist", "ignored");
-
-    var all = AllMetadata{
-        .allocator = allocator,
-        .tags = metadata_buf.toOwnedSlice(),
-    };
+    var all = try buildMetadata(
+        allocator,
+        &[_]MetadataType{
+            .id3v2,
+            .id3v1,
+        },
+        .{
+            .{.{ "TP1", "test" }},
+            .{.{ "artist", "ignored" }},
+        },
+    );
     defer all.deinit();
 
     var collator = try Collator.init(allocator, &all, .{});
@@ -434,29 +465,24 @@ test "prioritization last resort" {
 
 test "prioritization flac > ape" {
     var allocator = std.testing.allocator;
-    var metadata_buf = std.ArrayList(TypedMetadata).init(allocator);
-    defer metadata_buf.deinit();
-
-    // flac is prioritized over ape, so for duplicate keys the flac casing
-    // should end up in the result even if ape comes first in the file
-
-    try metadata_buf.append(TypedMetadata{ .ape = .{
-        .metadata = Metadata.init(allocator),
-        .header_or_footer = undefined,
-    } });
-    try metadata_buf.items[0].ape.metadata.map.put("Artist", "FLACcase");
-
-    try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
-    try metadata_buf.items[1].flac.map.put("ARTIST", "FlacCase");
-
-    var all = AllMetadata{
-        .allocator = allocator,
-        .tags = metadata_buf.toOwnedSlice(),
-    };
+    var all = try buildMetadata(
+        allocator,
+        &[_]MetadataType{
+            .ape,
+            .flac,
+        },
+        .{
+            .{.{ "Artist", "FLACcase" }},
+            .{.{ "ARTIST", "FlacCase" }},
+        },
+    );
     defer all.deinit();
 
     var collator = try Collator.init(allocator, &all, .{});
     defer collator.deinit();
+
+    // flac is prioritized over ape, so for duplicate keys the flac casing
+    // should end up in the result even if ape comes first in the file
 
     const artists = try collator.artists();
     try std.testing.expectEqual(@as(usize, 1), artists.len);
@@ -465,31 +491,28 @@ test "prioritization flac > ape" {
 
 test "prioritize_best for single values" {
     var allocator = std.testing.allocator;
-    var metadata_buf = std.ArrayList(TypedMetadata).init(allocator);
-    defer metadata_buf.deinit();
-
-    try metadata_buf.append(TypedMetadata{ .ape = .{
-        .metadata = Metadata.init(allocator),
-        .header_or_footer = undefined,
-    } });
-    try metadata_buf.items[0].ape.metadata.map.put("Album", "ape album");
-
-    try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
-    try metadata_buf.items[1].flac.map.put("ALBUM", "bad album");
-
-    try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
-    try metadata_buf.items[2].flac.map.put("ALBUM", "good album");
-    try metadata_buf.items[2].flac.map.put("ARTIST", "artist");
-
-    try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
-    try metadata_buf.items[3].flac.map.put("ALBUM", "best album");
-    try metadata_buf.items[3].flac.map.put("ARTIST", "artist");
-    try metadata_buf.items[3].flac.map.put("TITLE", "song");
-
-    var all = AllMetadata{
-        .allocator = allocator,
-        .tags = metadata_buf.toOwnedSlice(),
-    };
+    var all = try buildMetadata(
+        allocator,
+        &[_]MetadataType{
+            .ape,
+            .flac,
+            .flac,
+            .flac,
+        },
+        .{
+            .{.{ "Album", "ape album" }},
+            .{.{ "ALBUM", "bad album" }},
+            .{
+                .{ "ALBUM", "good album" },
+                .{ "ARTIST", "artist" },
+            },
+            .{
+                .{ "ALBUM", "best album" },
+                .{ "ARTIST", "artist" },
+                .{ "TITLE", "song" },
+            },
+        },
+    );
     defer all.deinit();
 
     var collator = try Collator.init(allocator, &all, .{
@@ -503,26 +526,22 @@ test "prioritize_best for single values" {
 
 test "prioritize_first for single values" {
     var allocator = std.testing.allocator;
-    var metadata_buf = std.ArrayList(TypedMetadata).init(allocator);
-    defer metadata_buf.deinit();
-
-    try metadata_buf.append(TypedMetadata{ .ape = .{
-        .metadata = Metadata.init(allocator),
-        .header_or_footer = undefined,
-    } });
-    try metadata_buf.items[0].ape.metadata.map.put("Album", "ape album");
-
-    try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
-    try metadata_buf.items[1].flac.map.put("ALBUM", "first album");
-
-    try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
-    try metadata_buf.items[2].flac.map.put("ALBUM", "second album");
-    try metadata_buf.items[2].flac.map.put("TITLE", "title  "); // extra spaces at the end to test trimming
-
-    var all = AllMetadata{
-        .allocator = allocator,
-        .tags = metadata_buf.toOwnedSlice(),
-    };
+    var all = try buildMetadata(
+        allocator,
+        &[_]MetadataType{
+            .ape,
+            .flac,
+            .flac,
+        },
+        .{
+            .{.{ "Album", "ape album" }},
+            .{.{ "ALBUM", "first album" }},
+            .{
+                .{ "ALBUM", "second album" },
+                .{ "TITLE", "title  " }, // extra spaces at the end to test trimming
+            },
+        },
+    );
     defer all.deinit();
 
     var collator = try Collator.init(allocator, &all, .{
@@ -540,26 +559,22 @@ test "prioritize_first for single values" {
 
 test "ignore_duplicates for single values" {
     var allocator = std.testing.allocator;
-    var metadata_buf = std.ArrayList(TypedMetadata).init(allocator);
-    defer metadata_buf.deinit();
-
-    try metadata_buf.append(TypedMetadata{ .ape = .{
-        .metadata = Metadata.init(allocator),
-        .header_or_footer = undefined,
-    } });
-    try metadata_buf.items[0].ape.metadata.map.put("Album", "ape album");
-
-    try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
-    try metadata_buf.items[1].flac.map.put("ALBUM", "first album");
-
-    try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
-    try metadata_buf.items[2].flac.map.put("ALBUM", "second album");
-    try metadata_buf.items[2].flac.map.put("TITLE", "title");
-
-    var all = AllMetadata{
-        .allocator = allocator,
-        .tags = metadata_buf.toOwnedSlice(),
-    };
+    var all = try buildMetadata(
+        allocator,
+        &[_]MetadataType{
+            .ape,
+            .flac,
+            .flac,
+        },
+        .{
+            .{.{ "Album", "ape album" }},
+            .{.{ "ALBUM", "first album" }},
+            .{
+                .{ "ALBUM", "second album" },
+                .{ "TITLE", "title" },
+            },
+        },
+    );
     defer all.deinit();
 
     var collator = try Collator.init(allocator, &all, .{
@@ -577,28 +592,25 @@ test "ignore_duplicates for single values" {
 
 test "track numbers" {
     var allocator = std.testing.allocator;
-    var metadata_buf = std.ArrayList(TypedMetadata).init(allocator);
-    defer metadata_buf.deinit();
-
-    try metadata_buf.append(TypedMetadata{ .ape = .{
-        .metadata = Metadata.init(allocator),
-        .header_or_footer = undefined,
-    } });
-    try metadata_buf.items[0].ape.metadata.map.put("Track", "5/15");
-
-    try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
-    try metadata_buf.items[1].flac.map.put("TRACKNUMBER", "1");
-
-    try metadata_buf.append(TypedMetadata{ .flac = Metadata.init(allocator) });
-    try metadata_buf.items[2].flac.map.put("TRACKTOTAL", "5");
-    try metadata_buf.items[2].flac.map.put("TRACKTOTAL", "0"); // should be ignored
-    try metadata_buf.items[2].flac.map.put("TRACKNUMBER", "5");
-    try metadata_buf.items[2].flac.map.put("TRACKNUMBER", "0"); // should be ignored
-
-    var all = AllMetadata{
-        .allocator = allocator,
-        .tags = metadata_buf.toOwnedSlice(),
-    };
+    var all = try buildMetadata(
+        allocator,
+        &[_]MetadataType{
+            .ape,
+            .flac,
+            .flac,
+        },
+        .{
+            .{.{ "Track", "5/15" }},
+            .{.{ "TRACKNUMBER", "1" }},
+            .{
+                .{ "TRACKTOTAL", "5" },
+                .{ "TRACKTOTAL", "0" }, // should be ignored
+                .{ "TRACKNUMBER", "5" },
+                .{ "TRACKNUMBER", "0" }, // should be ignored
+                .{ "TRACKNUMBER", "15" },
+            },
+        },
+    );
     defer all.deinit();
 
     var collator = try Collator.init(allocator, &all, .{
@@ -607,9 +619,10 @@ test "track numbers" {
     defer collator.deinit();
 
     const track_numbers = try collator.trackNumbers();
-    try std.testing.expectEqual(@as(usize, 2), track_numbers.numbers.len);
+    try std.testing.expectEqual(@as(usize, 3), track_numbers.numbers.len);
     try std.testing.expectEqual(@as(u32, 1), track_numbers.numbers[0]);
     try std.testing.expectEqual(@as(u32, 5), track_numbers.numbers[1]);
+    try std.testing.expectEqual(@as(u32, 15), track_numbers.numbers[2]);
 
     try std.testing.expectEqual(@as(usize, 2), track_numbers.totals.len);
     try std.testing.expectEqual(@as(u32, 5), track_numbers.totals[0]);
