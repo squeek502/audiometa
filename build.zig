@@ -99,6 +99,7 @@ pub fn build(b: *std.build.Builder) void {
     // Fuzz
 
     _ = addFuzzer(b, "fuzz", &.{}, audiometa) catch unreachable;
+    _ = addFuzzer(b, "fuzz-collation", &.{}, audiometa) catch unreachable;
 
     var fuzz_oom = addFuzzer(b, "fuzz-oom", &.{}, audiometa) catch unreachable;
     // setup build options
