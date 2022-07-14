@@ -164,7 +164,8 @@ pub fn readItems(allocator: Allocator, reader: anytype, seekable_stream: anytype
                 try reader.readNoEof(value);
 
                 // reject invalid UTF-8
-                if (!std.unicode.utf8ValidateSlice(value)) {
+                // TODO: key could potentially be more restricted to ASCII or a subset of ASCII
+                if (!std.unicode.utf8ValidateSlice(key) or !std.unicode.utf8ValidateSlice(value)) {
                     continue;
                 }
 

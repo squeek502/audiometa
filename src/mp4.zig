@@ -208,6 +208,11 @@ pub fn readMetadataItem(allocator: Allocator, reader: anytype, seekable_stream: 
                 errdefer allocator.free(meaning_string);
 
                 try reader.readNoEof(meaning_string);
+
+                if (!std.unicode.utf8ValidateSlice(meaning_string)) {
+                    return error.InvalidUTF8Data;
+                }
+
                 break :meaning_string meaning_string;
             };
             var should_free_meaning_string = true;
@@ -234,6 +239,11 @@ pub fn readMetadataItem(allocator: Allocator, reader: anytype, seekable_stream: 
                 errdefer allocator.free(name_string);
 
                 try reader.readNoEof(name_string);
+
+                if (!std.unicode.utf8ValidateSlice(name_string)) {
+                    return error.InvalidUTF8Data;
+                }
+
                 break :name_string name_string;
             };
             defer allocator.free(name_string);
@@ -277,6 +287,10 @@ pub fn readMetadataItem(allocator: Allocator, reader: anytype, seekable_stream: 
                 .utf8 => {
                     var value = try data_atom.readValueAsBytes(allocator, reader);
                     defer allocator.free(value);
+
+                    if (!std.unicode.utf8ValidateSlice(value)) {
+                        return error.InvalidUTF8Data;
+                    }
 
                     try metadata.map.put(metadata_item_name, value);
                 },
@@ -712,6 +726,7 @@ pub fn readFullAtomIntoArrayList(allocator: Allocator, _reader: anytype, _seekab
                     error.InvalidDataAtom,
                     error.AtomSizeTooSmall,
                     error.InvalidUTF16Data,
+                    error.InvalidUTF8Data,
                     error.EndOfConstrainedStream,
                     error.AtomSizeTooLarge,
                     => {

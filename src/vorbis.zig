@@ -41,6 +41,10 @@ pub fn readComment(allocator: Allocator, reader: anytype, seekable_stream: anyty
         defer allocator.free(comment);
         try reader.readNoEof(comment);
 
+        if (!std.unicode.utf8ValidateSlice(comment)) {
+            continue;
+        }
+
         var split_it = std.mem.split(u8, comment, "=");
         var field = split_it.next() orelse return error.InvalidCommentField;
         var value = split_it.rest();
@@ -57,7 +61,7 @@ pub fn readComment(allocator: Allocator, reader: anytype, seekable_stream: anyty
     return metadata;
 }
 
-/// Expects the stream to be at the start of the Ogg bitstream (i.e. 
+/// Expects the stream to be at the start of the Ogg bitstream (i.e.
 /// any ID3v2 tags must be skipped before calling this function)
 pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Metadata {
     _ = seekable_stream;

@@ -274,7 +274,7 @@ pub const EncodedTextIterator = struct {
         required,
     };
 
-    pub fn next(self: *Self, terminator: TerminatorType) error{ InvalidUTF16BOM, InvalidUTF16Data }!?[]const u8 {
+    pub fn next(self: *Self, terminator: TerminatorType) error{ InvalidUTF16BOM, InvalidUTF16Data, InvalidUTF8Data }!?[]const u8 {
         // The idea here is that we want to handle lists of null-terminated
         // values but also potentially malformed single values, i.e.
         // a zero length text with no null-termination
@@ -326,7 +326,7 @@ pub const EncodedTextIterator = struct {
     /// Always returns UTF-8.
     /// When converting from UTF-16, the returned data is temporary
     /// and will be overwritten on subsequent calls to `next`.
-    fn nextToUtf8(self: Self, val_bytes: []u8) error{ InvalidUTF16BOM, InvalidUTF16Data }![]const u8 {
+    fn nextToUtf8(self: Self, val_bytes: []u8) error{ InvalidUTF16BOM, InvalidUTF16Data, InvalidUTF8Data }![]const u8 {
         if (self.encoding.charSize() == 2) {
             var bytes_as_utf16 = @alignCast(u16_align, std.mem.bytesAsSlice(u16, val_bytes));
             var val_no_bom = bytes_as_utf16;
@@ -353,6 +353,8 @@ pub const EncodedTextIterator = struct {
             }
             const utf8_end = std.unicode.utf16leToUtf8(self.utf8_buf, val_no_bom) catch return error.InvalidUTF16Data;
             return self.utf8_buf[0..utf8_end];
+        } else {
+            if (!std.unicode.utf8ValidateSlice(val_bytes)) return error.InvalidUTF8Data;
         }
         return val_bytes;
     }
@@ -720,6 +722,7 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !ID
             error.UnexpectedTextDataEnd,
             error.InvalidUserDefinedTextFrame,
             error.InvalidUTF16Data,
+            error.InvalidUTF8Data,
             => {
                 // This is a bit weird, but go back to the start of the frame and then
                 // skip forward. This ensures that we correctly skip the frame in all
