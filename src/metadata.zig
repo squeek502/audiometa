@@ -245,6 +245,14 @@ pub const TypedMetadata = union(MetadataType) {
             .ape => |val| val.metadata,
         };
     }
+
+    pub fn getMetadataPtr(typed_meta: *TypedMetadata) *Metadata {
+        return switch (typed_meta.*) {
+            .id3v1, .flac, .vorbis, .mp4 => |*val| val,
+            .id3v2 => |*val| &val.metadata,
+            .ape => |*val| &val.metadata,
+        };
+    }
 };
 
 pub const AllMetadata = struct {
