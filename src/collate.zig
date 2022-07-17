@@ -175,42 +175,10 @@ pub const Collator = struct {
     fn addValuesToSet(set: *CollatedTextSet, tag: *TypedMetadata, keys: fields.NameLookups) Allocator.Error!void {
         const tag_keys = keys[@enumToInt(std.meta.activeTag(tag.*))] orelse return;
         for (tag_keys) |key| {
-            switch (tag.*) {
-                .id3v1 => |*id3v1_meta| {
-                    if (id3v1_meta.map.getFirst(key)) |value| {
-                        try set.put(value);
-                    }
-                },
-                .flac => |*flac_meta| {
-                    var value_it = flac_meta.map.valueIterator(key);
-                    while (value_it.next()) |value| {
-                        try set.put(value);
-                    }
-                },
-                .vorbis => |*vorbis_meta| {
-                    var value_it = vorbis_meta.map.valueIterator(key);
-                    while (value_it.next()) |value| {
-                        try set.put(value);
-                    }
-                },
-                .id3v2 => |*id3v2_meta| {
-                    var value_it = id3v2_meta.metadata.map.valueIterator(key);
-                    while (value_it.next()) |value| {
-                        try set.put(value);
-                    }
-                },
-                .ape => |*ape_meta| {
-                    var value_it = ape_meta.metadata.map.valueIterator(key);
-                    while (value_it.next()) |value| {
-                        try set.put(value);
-                    }
-                },
-                .mp4 => |*mp4_meta| {
-                    var value_it = mp4_meta.map.valueIterator(key);
-                    while (value_it.next()) |value| {
-                        try set.put(value);
-                    }
-                },
+            var metadata = tag.getMetadataPtr();
+            var value_it = metadata.map.valueIterator(key);
+            while (value_it.next()) |value| {
+                try set.put(value);
             }
         }
     }
