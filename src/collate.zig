@@ -183,18 +183,16 @@ pub const Collator = struct {
         }
     }
 
-    // TODO: This should take duplicate_tag_strategy into account
     pub fn getValuesFromKeys(self: *Self, keys: fields.NameLookups) Allocator.Error![][]const u8 {
         var set = CollatedTextSet.init(self.arena.allocator(), self.config.utf8_normalizer);
         defer set.deinit();
 
-        for (self.config.prioritization.order) |meta_type| {
+        for (self.tag_indexes_by_priority) |tag_index| {
+            const tag = &self.metadata.tags[tag_index];
+            const meta_type = std.meta.activeTag(tag.*);
             const is_last_resort = self.config.prioritization.priority(meta_type) == .last_resort;
             if (!is_last_resort or set.count() == 0) {
-                var meta_it = self.metadata.metadataOfTypeIterator(meta_type);
-                while (meta_it.next()) |meta| {
-                    try addValuesToSet(&set, meta, keys);
-                }
+                try addValuesToSet(&set, tag, keys);
             }
         }
         return try self.arena.allocator().dupe([]const u8, set.values.items);
@@ -473,7 +471,7 @@ test "prioritization flac > ape" {
     try std.testing.expectEqualStrings("FlacCase", artists[0]);
 }
 
-test "prioritize_best for single values" {
+test "duplicate_tag_strategy: prioritize_best" {
     var allocator = std.testing.allocator;
     var all = try buildMetadata(
         allocator,
@@ -506,9 +504,18 @@ test "prioritize_best for single values" {
 
     const album = try collator.album();
     try std.testing.expectEqualStrings("best album", album.?);
+
+    const albums = try collator.albums();
+    // should get one from all 4 tags
+    try std.testing.expectEqual(@as(usize, 4), albums.len);
+    // highest priority should be the last FLAC tag
+    try std.testing.expectEqualStrings("best album", albums[0]);
+    try std.testing.expectEqualStrings("good album", albums[1]);
+    try std.testing.expectEqualStrings("bad album", albums[2]);
+    try std.testing.expectEqualStrings("ape album", albums[3]);
 }
 
-test "prioritize_first for single values" {
+test "duplicate_tag_strategy: prioritize_first" {
     var allocator = std.testing.allocator;
     var all = try buildMetadata(
         allocator,
@@ -536,12 +543,20 @@ test "prioritize_first for single values" {
     const album = try collator.album();
     try std.testing.expectEqualStrings("first album", album.?);
 
+    const albums = try collator.albums();
+    // should get one from all 3 tags
+    try std.testing.expectEqual(@as(usize, 3), albums.len);
+    // highest priority should be the first FLAC tag
+    try std.testing.expectEqualStrings("first album", albums[0]);
+    try std.testing.expectEqualStrings("second album", albums[1]);
+    try std.testing.expectEqualStrings("ape album", albums[2]);
+
     // should get the title from the second FLAC tag
     const title = try collator.title();
     try std.testing.expectEqualStrings("title", title.?);
 }
 
-test "ignore_duplicates for single values" {
+test "duplicate_tag_strategy: ignore_duplicates" {
     var allocator = std.testing.allocator;
     var all = try buildMetadata(
         allocator,
@@ -568,6 +583,13 @@ test "ignore_duplicates for single values" {
 
     const album = try collator.album();
     try std.testing.expectEqualStrings("first album", album.?);
+
+    // should get one from the first FLAC and one from APE
+    const albums = try collator.albums();
+    try std.testing.expectEqual(@as(usize, 2), albums.len);
+    // highest priority should be the first FLAC tag
+    try std.testing.expectEqualStrings("first album", albums[0]);
+    try std.testing.expectEqualStrings("ape album", albums[1]);
 
     // should ignore the second FLAC tag, so shouldn't find a title
     const title = try collator.title();
