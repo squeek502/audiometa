@@ -157,42 +157,82 @@ pub const Collator = struct {
         }
     }
 
+    pub const PrioritizedValueIterator = struct {
+        collator: *const Collator,
+        priority_index: usize = 0,
+        key_index: usize = 0,
+        value_iterator: ?metadata_namespace.MetadataMap.ValueIterator = null,
+        keys: fields.NameLookups,
+
+        pub const Entry = struct {
+            tag_index: usize,
+            value: []const u8,
+        };
+
+        pub fn next(self: *PrioritizedValueIterator) ?Entry {
+            while (true) {
+                // if we're out of tags, then return null
+                if (self.priority_index >= self.collator.tag_indexes_by_priority.len) return null;
+
+                const tag_index = self.collator.tag_indexes_by_priority[self.priority_index];
+                const tag = &self.collator.metadata.tags[tag_index];
+                const tag_keys = self.keys[@enumToInt(std.meta.activeTag(tag.*))];
+
+                if (self.value_iterator) |*value_iterator| {
+                    if (value_iterator.next()) |value| {
+                        return Entry{
+                            .tag_index = tag_index,
+                            .value = value,
+                        };
+                    }
+                    // if we're out of values, then move on to the next key index
+                    self.value_iterator = null;
+                    self.key_index += 1;
+                }
+
+                // if we're out of keys, then move on to the next priority index
+                if (tag_keys == null or self.key_index >= tag_keys.?.len) {
+                    self.priority_index += 1;
+                    self.key_index = 0;
+                    self.value_iterator = null;
+                    continue;
+                }
+
+                const key = (tag_keys.?)[self.key_index];
+                self.value_iterator = tag.getMetadataPtr().map.valueIterator(key);
+            }
+        }
+    };
+
+    pub fn prioritizedValueIterator(self: *const Collator, keys: fields.NameLookups) PrioritizedValueIterator {
+        return .{
+            .collator = self,
+            .keys = keys,
+        };
+    }
+
     /// Returns a single value gotten from the tag with the highest priority,
     /// or null if no values exist for the relevant keys in any of the tags.
     pub fn getPrioritizedValue(self: *Self, keys: fields.NameLookups) Allocator.Error!?[]const u8 {
-        for (self.tag_indexes_by_priority) |tag_index| {
-            const tag = &self.metadata.tags[tag_index];
-            const tag_keys = keys[@enumToInt(std.meta.activeTag(tag.*))] orelse continue;
-            inner: for (tag_keys) |key| {
-                const value = tag.getMetadata().map.getFirst(key) orelse continue :inner;
-                const ameliorated_value = (try ameliorateCanonical(self.arena.allocator(), value)) orelse continue :inner;
-                return ameliorated_value;
-            }
+        var value_it = self.prioritizedValueIterator(keys);
+        while (value_it.next()) |entry| {
+            const ameliorated_value = (try ameliorateCanonical(self.arena.allocator(), entry.value)) orelse continue;
+            return ameliorated_value;
         }
         return null;
-    }
-
-    fn addValuesToSet(set: *CollatedTextSet, tag: *TypedMetadata, keys: fields.NameLookups) Allocator.Error!void {
-        const tag_keys = keys[@enumToInt(std.meta.activeTag(tag.*))] orelse return;
-        for (tag_keys) |key| {
-            var metadata = tag.getMetadataPtr();
-            var value_it = metadata.map.valueIterator(key);
-            while (value_it.next()) |value| {
-                try set.put(value);
-            }
-        }
     }
 
     pub fn getValuesFromKeys(self: *Self, keys: fields.NameLookups) Allocator.Error![][]const u8 {
         var set = CollatedTextSet.init(self.arena.allocator(), self.config.utf8_normalizer);
         defer set.deinit();
 
-        for (self.tag_indexes_by_priority) |tag_index| {
-            const tag = &self.metadata.tags[tag_index];
+        var value_it = self.prioritizedValueIterator(keys);
+        while (value_it.next()) |entry| {
+            const tag = &self.metadata.tags[entry.tag_index];
             const meta_type = std.meta.activeTag(tag.*);
             const is_last_resort = self.config.prioritization.priority(meta_type) == .last_resort;
             if (!is_last_resort or set.count() == 0) {
-                try addValuesToSet(&set, tag, keys);
+                try set.put(entry.value);
             }
         }
         return try self.arena.allocator().dupe([]const u8, set.values.items);
@@ -232,11 +272,22 @@ pub const Collator = struct {
     };
 
     pub fn trackNumber(self: *Self) Allocator.Error!TrackNumber {
-        const maybe_track_number_as_string = try self.getPrioritizedValue(fields.track_number);
         var track_number = TrackNumber{ .number = null, .total = null };
-        from_track_number: {
-            var as_string = maybe_track_number_as_string orelse break :from_track_number;
-            track_number = splitTrackNumber(as_string);
+
+        var track_number_it = self.prioritizedValueIterator(fields.track_number);
+        while (track_number_it.next()) |entry| {
+            const split_track_number = splitTrackNumber(entry.value);
+            if (track_number.number == null and split_track_number.number != null) {
+                track_number.number = split_track_number.number;
+            }
+            if (track_number.total == null and split_track_number.total != null) {
+                track_number.total = split_track_number.total;
+            }
+            // Only break if both number and total are set, to ensure that we end up
+            // getting the total if we encounter values like "5" and then "5/15"
+            if (track_number.number != null and track_number.total != null) {
+                break;
+            }
         }
 
         if (track_number.total == null) {
@@ -398,6 +449,55 @@ fn buildMetadata(allocator: Allocator, comptime types: []const MetadataType, com
         .allocator = allocator,
         .tags = metadata_buf.toOwnedSlice(),
     };
+}
+
+test "PrioritizedValueIterator" {
+    var allocator = std.testing.allocator;
+    var all = try buildMetadata(
+        allocator,
+        &[_]MetadataType{
+            .ape,
+            .flac,
+            .flac,
+            .flac,
+        },
+        .{
+            .{.{ "Album", "ape album" }},
+            .{.{ "ALBUM", "bad album" }},
+            .{
+                .{ "ALBUM", "best album" },
+                .{ "ALBUM", "second best album" },
+                .{ "ARTIST", "artist" },
+                .{ "TITLE", "song" },
+            },
+            .{
+                .{ "ALBUM", "good album" },
+                .{ "ARTIST", "artist" },
+            },
+        },
+    );
+    defer all.deinit();
+
+    var collator = try Collator.init(allocator, &all, .{
+        .duplicate_tag_strategy = .prioritize_best,
+    });
+    defer collator.deinit();
+
+    const prioritized_values: []const []const u8 = &.{
+        "best album",
+        "second best album",
+        "good album",
+        "bad album",
+        "ape album",
+    };
+
+    var prioritized_it = collator.prioritizedValueIterator(fields.album);
+    var i: usize = 0;
+    while (prioritized_it.next()) |entry| {
+        const expected = prioritized_values[i];
+        try std.testing.expectEqualStrings(expected, entry.value);
+        i += 1;
+    }
 }
 
 test "id3v2.2 frames work" {
@@ -597,6 +697,54 @@ test "duplicate_tag_strategy: ignore_duplicates" {
     const track_number = try collator.trackNumber();
     try std.testing.expect(track_number.number == null);
     try std.testing.expect(track_number.total == null);
+}
+
+test "track number" {
+    var allocator = std.testing.allocator;
+    var all = try buildMetadata(
+        allocator,
+        &[_]MetadataType{
+            .ape,
+        },
+        .{
+            .{
+                .{ "Track", "5" },
+                .{ "Track", "5/15" },
+            },
+        },
+    );
+    defer all.deinit();
+
+    var collator = try Collator.init(allocator, &all, .{});
+    defer collator.deinit();
+
+    const track_number = try collator.trackNumber();
+    try std.testing.expectEqual(@as(u32, 5), track_number.number.?);
+    try std.testing.expectEqual(@as(u32, 15), track_number.total.?);
+}
+
+test "track number but total is separate" {
+    var allocator = std.testing.allocator;
+    var all = try buildMetadata(
+        allocator,
+        &[_]MetadataType{
+            .flac,
+        },
+        .{
+            .{
+                .{ "TRACKNUMBER", "5" },
+                .{ "TRACKTOTAL", "15" },
+            },
+        },
+    );
+    defer all.deinit();
+
+    var collator = try Collator.init(allocator, &all, .{});
+    defer collator.deinit();
+
+    const track_number = try collator.trackNumber();
+    try std.testing.expectEqual(@as(u32, 5), track_number.number.?);
+    try std.testing.expectEqual(@as(u32, 15), track_number.total.?);
 }
 
 test "track numbers" {
