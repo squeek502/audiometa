@@ -283,39 +283,38 @@ pub const Collator = struct {
         var track_total_set = std.AutoArrayHashMapUnmanaged(u32, void){};
         defer track_total_set.deinit(self.allocator);
 
-        for (self.config.prioritization.order) |meta_type| {
+        for (self.tag_indexes_by_priority) |tag_index| {
+            const tag = &self.metadata.tags[tag_index];
+            const meta_type = std.meta.activeTag(tag.*);
             const is_last_resort = self.config.prioritization.priority(meta_type) == .last_resort;
 
-            var meta_it = self.metadata.metadataOfTypeIterator(meta_type);
-            while (meta_it.next()) |meta| {
-                track_numbers: {
-                    if (is_last_resort and track_number_set.count() != 0) break :track_numbers;
+            track_numbers: {
+                if (is_last_resort and track_number_set.count() != 0) break :track_numbers;
 
-                    const tag_keys = fields.track_number[@enumToInt(meta_type)] orelse break :track_numbers;
-                    for (tag_keys) |key| {
-                        var value_it = meta.getMetadata().map.valueIterator(key);
-                        while (value_it.next()) |track_number_as_string| {
-                            const track_number = splitTrackNumber(track_number_as_string);
-                            if (track_number.number) |number| {
-                                try track_number_set.put(self.allocator, number, {});
-                            }
-                            if (track_number.total) |total| {
-                                try track_total_set.put(self.allocator, total, {});
-                            }
+                const tag_keys = fields.track_number[@enumToInt(meta_type)] orelse break :track_numbers;
+                for (tag_keys) |key| {
+                    var value_it = tag.getMetadata().map.valueIterator(key);
+                    while (value_it.next()) |track_number_as_string| {
+                        const track_number = splitTrackNumber(track_number_as_string);
+                        if (track_number.number) |number| {
+                            try track_number_set.put(self.allocator, number, {});
+                        }
+                        if (track_number.total) |total| {
+                            try track_total_set.put(self.allocator, total, {});
                         }
                     }
                 }
-                track_totals: {
-                    if (is_last_resort and track_total_set.count() != 0) break :track_totals;
+            }
+            track_totals: {
+                if (is_last_resort and track_total_set.count() != 0) break :track_totals;
 
-                    const tag_keys = fields.track_total[@enumToInt(meta_type)] orelse break :track_totals;
-                    for (tag_keys) |key| {
-                        var value_it = meta.getMetadata().map.valueIterator(key);
-                        while (value_it.next()) |track_total_as_string| {
-                            const maybe_total: ?u32 = parseNumberDisallowingZero(u32, track_total_as_string);
-                            if (maybe_total) |total| {
-                                try track_total_set.put(self.allocator, total, {});
-                            }
+                const tag_keys = fields.track_total[@enumToInt(meta_type)] orelse break :track_totals;
+                for (tag_keys) |key| {
+                    var value_it = tag.getMetadata().map.valueIterator(key);
+                    while (value_it.next()) |track_total_as_string| {
+                        const maybe_total: ?u32 = parseNumberDisallowingZero(u32, track_total_as_string);
+                        if (maybe_total) |total| {
+                            try track_total_set.put(self.allocator, total, {});
                         }
                     }
                 }
@@ -571,6 +570,7 @@ test "duplicate_tag_strategy: ignore_duplicates" {
             .{
                 .{ "ALBUM", "second album" },
                 .{ "TITLE", "title" },
+                .{ "TRACKNUMBER", "1" },
             },
         },
     );
@@ -591,9 +591,12 @@ test "duplicate_tag_strategy: ignore_duplicates" {
     try std.testing.expectEqualStrings("first album", albums[0]);
     try std.testing.expectEqualStrings("ape album", albums[1]);
 
-    // should ignore the second FLAC tag, so shouldn't find a title
+    // should ignore the second FLAC tag, so shouldn't find a title or track number
     const title = try collator.title();
     try std.testing.expect(title == null);
+    const track_number = try collator.trackNumber();
+    try std.testing.expect(track_number.number == null);
+    try std.testing.expect(track_number.total == null);
 }
 
 test "track numbers" {
