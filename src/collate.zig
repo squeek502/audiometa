@@ -165,6 +165,7 @@ pub const Collator = struct {
         keys: fields.NameLookups,
 
         pub const Entry = struct {
+            priority_index: usize,
             tag_index: usize,
             value: []const u8,
         };
@@ -181,6 +182,7 @@ pub const Collator = struct {
                 if (self.value_iterator) |*value_iterator| {
                     if (value_iterator.next()) |value| {
                         return Entry{
+                            .priority_index = self.priority_index,
                             .tag_index = tag_index,
                             .value = value,
                         };
@@ -273,6 +275,7 @@ pub const Collator = struct {
 
     pub fn trackNumber(self: *Self) Allocator.Error!TrackNumber {
         var track_number = TrackNumber{ .number = null, .total = null };
+        var track_total_priority_index: ?usize = null;
 
         var track_number_it = self.prioritizedValueIterator(fields.track_number);
         while (track_number_it.next()) |entry| {
@@ -282,6 +285,7 @@ pub const Collator = struct {
             }
             if (track_number.total == null and split_track_number.total != null) {
                 track_number.total = split_track_number.total;
+                track_total_priority_index = entry.priority_index;
             }
             // Only break if both number and total are set, to ensure that we end up
             // getting the total if we encounter values like "5" and then "5/15"
@@ -290,11 +294,15 @@ pub const Collator = struct {
             }
         }
 
-        if (track_number.total == null) {
-            const maybe_track_total_as_string = try self.getPrioritizedValue(fields.track_total);
-            from_track_total: {
-                var as_string = maybe_track_total_as_string orelse break :from_track_total;
-                track_number.total = parseNumberDisallowingZero(u32, as_string);
+        var track_total_it = self.prioritizedValueIterator(fields.track_total);
+        while (track_total_it.next()) |entry| {
+            if (track_total_priority_index != null and entry.priority_index >= track_total_priority_index.?) {
+                continue;
+            }
+            const maybe_track_total = parseNumberDisallowingZero(u32, entry.value);
+            if (maybe_track_total) |track_total| {
+                track_number.total = track_total;
+                break;
             }
         }
 
@@ -728,9 +736,13 @@ test "track number but total is separate" {
     var all = try buildMetadata(
         allocator,
         &[_]MetadataType{
+            .id3v2,
             .flac,
         },
         .{
+            // each of the values in the id3v2 tag should be superseded
+            // by the values in the flac tag, since flac is prioritized higher
+            .{.{ "TRCK", "4/16" }},
             .{
                 .{ "TRACKNUMBER", "5" },
                 .{ "TRACKTOTAL", "15" },
