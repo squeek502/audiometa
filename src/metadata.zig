@@ -654,7 +654,7 @@ pub const MetadataMap = struct {
         }
     };
 
-    pub fn valueIterator(self: *MetadataMap, name: []const u8) ValueIterator {
+    pub fn valueIterator(self: *const MetadataMap, name: []const u8) ValueIterator {
         if (self.name_to_indexes.getPtr(name)) |entry_index_list| {
             return ValueIterator{
                 .metadata_map = self,

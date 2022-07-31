@@ -115,7 +115,8 @@ test "unsynch reader" {
     const encoded = "\xFF\x00\x00\xFE\xFF\x00";
     var buf: [encoded.len]u8 = undefined;
     var stream = std.io.fixedBufferStream(encoded);
-    var reader = unsynchCapableReader(true, stream.reader()).reader();
+    var unsynch_reader = unsynchCapableReader(true, stream.reader());
+    var reader = unsynch_reader.reader();
 
     const decoded_len = try reader.read(&buf);
 

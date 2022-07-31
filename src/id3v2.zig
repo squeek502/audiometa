@@ -243,7 +243,7 @@ pub const EncodedTextIterator = struct {
             text_bytes = utf8_text;
         }
 
-        const utf8_buf = switch (options.encoding.charSize()) {
+        const utf8_buf: []u8 = switch (options.encoding.charSize()) {
             1 => &[_]u8{},
             // In the worst case, a single UTF-16 u16 can take up 3 bytes when
             // converted to UTF-8 (e.g. 0xFFFF as UTF-16 is 0xEF 0xBF 0xBF as UTF-8)

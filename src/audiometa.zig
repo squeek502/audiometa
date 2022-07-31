@@ -17,6 +17,6 @@ pub const util = @import("util.zig");
 pub const collate = @import("collate.zig");
 pub const ziglyph = @import("ziglyph");
 
-test "" {
+test {
     std.testing.refAllDecls(@This());
 }
