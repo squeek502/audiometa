@@ -26,7 +26,7 @@ const ffprobe_unusable_output_files = std.ComptimeStringMap(void, .{
 
 test "music folder" {
     const allocator = std.testing.allocator;
-    var dir = try std.fs.cwd().openDir("/media/drive4/music/", .{ .iterate = true });
+    var dir = try std.fs.cwd().openIterableDir("/media/drive4/music/", .{});
     var walker = try dir.walk(allocator);
     defer walker.deinit();
 
