@@ -342,7 +342,7 @@ pub const EncodedTextIterator = struct {
                 // TODO: I feel like this probably won't handle big endian native architectures correctly
                 if (bytes_as_utf16[0] == 0xFFFE) {
                     for (bytes_as_utf16) |c, i| {
-                        bytes_as_utf16[i] = @byteSwap(u16, c);
+                        bytes_as_utf16[i] = @byteSwap(c);
                     }
                 }
                 // check for byte order mark and skip it
@@ -402,8 +402,6 @@ pub fn readTextFrameCommon(unsynch_capable_reader: anytype, frame_header: *Frame
 /// On error, seekable_stream cursor position will be wherever the error happened, it is
 /// up to the caller to determine what to do from there
 pub fn readFrame(allocator: Allocator, unsynch_capable_reader: anytype, seekable_stream: anytype, metadata_id3v2_container: *ID3v2Metadata, frame_header: *FrameHeader, remaining_tag_size: usize, full_unsynch: bool) !void {
-    _ = allocator;
-
     const id3_major_version = metadata_id3v2_container.header.major_version;
     var metadata = &metadata_id3v2_container.metadata;
     var metadata_map = &metadata.map;
