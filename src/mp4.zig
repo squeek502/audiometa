@@ -310,7 +310,7 @@ pub fn readMetadataItem(allocator: Allocator, reader: anytype, seekable_stream: 
 
                     // swap the bytes to make it little-endian instead of big-endian
                     for (value_utf16) |c, i| {
-                        value_utf16[i] = @byteSwap(u16, c);
+                        value_utf16[i] = @byteSwap(c);
                     }
 
                     // convert to UTF-8

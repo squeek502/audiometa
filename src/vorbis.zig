@@ -64,9 +64,8 @@ pub fn readComment(allocator: Allocator, reader: anytype, seekable_stream: anyty
 /// Expects the stream to be at the start of the Ogg bitstream (i.e.
 /// any ID3v2 tags must be skipped before calling this function)
 pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Metadata {
-    _ = seekable_stream;
-
-    const ogg_page_reader = ogg.oggPageReader(reader).reader();
+    var raw_ogg_page_reader = ogg.oggPageReader(reader);
+    const ogg_page_reader = raw_ogg_page_reader.reader();
 
     // identification
     const id_header_type = try ogg_page_reader.readByte();
