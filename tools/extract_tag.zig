@@ -4,10 +4,10 @@ const assert = std.debug.assert;
 
 pub fn main() anyerror!void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer assert(gpa.deinit() == false);
+    defer assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
-    var args = try std.process.argsAlloc(allocator);
+    const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
     if (args.len < 3) {
@@ -17,7 +17,7 @@ pub fn main() anyerror!void {
 
     const in_path = args[1];
     const out_path = args[2];
-    var index_selection: ?usize = blk: {
+    const index_selection: ?usize = blk: {
         if (args.len < 4) break :blk null;
         const index_str = args[3];
         break :blk (std.fmt.parseInt(usize, index_str, 10) catch null);
@@ -33,7 +33,7 @@ pub fn main() anyerror!void {
     var buf: std.ArrayList(u8) = std.ArrayList(u8).init(allocator);
     defer buf.deinit();
 
-    for (all_metadata.tags) |tag, i| {
+    for (all_metadata.tags, 0..) |tag, i| {
         if (index_selection != null and index_selection.? != i + 1) {
             continue;
         }
@@ -48,12 +48,12 @@ pub fn main() anyerror!void {
             try buf_writer.writeAll(audiometa.flac.flac_stream_marker);
             const is_last_metadata_block = @as(u8, 1 << 7);
             try buf_writer.writeByte(audiometa.flac.block_type_vorbis_comment | is_last_metadata_block);
-            try buf_writer.writeIntBig(u24, @intCast(u24, metadata.end_offset - metadata.start_offset));
+            try buf_writer.writeInt(u24, @intCast(metadata.end_offset - metadata.start_offset), .big);
             try sliceFileIntoBuf(&buf, file, metadata.start_offset, metadata.end_offset);
         } else if (tag == .mp4) {
             // MP4 start/end offsets only include the 'meta' atom, so we need to provide the ftyp and moov atoms
             const meta_data_len = metadata.end_offset - metadata.start_offset;
-            try writeMp4Atoms(buf.writer(), @intCast(u32, meta_data_len));
+            try writeMp4Atoms(buf.writer(), @intCast(meta_data_len));
             try sliceFileIntoBuf(&buf, file, metadata.start_offset, metadata.end_offset);
         } else {
             try sliceFileIntoBuf(&buf, file, metadata.start_offset, metadata.end_offset);
@@ -68,9 +68,9 @@ pub fn main() anyerror!void {
 }
 
 fn sliceFileIntoBuf(buf: *std.ArrayList(u8), file: std.fs.File, start_offset: usize, end_offset: usize) !void {
-    var contents_len = end_offset - start_offset;
+    const contents_len = end_offset - start_offset;
     try buf.ensureUnusedCapacity(contents_len);
-    var buf_slice = buf.unusedCapacitySlice()[0..contents_len];
+    const buf_slice = buf.unusedCapacitySlice()[0..contents_len];
     const bytes_read = try file.pread(buf_slice, start_offset);
     assert(bytes_read == contents_len);
     buf.items.len += bytes_read;
@@ -84,9 +84,9 @@ fn writeMp4Atoms(writer: anytype, meta_atom_len: u32) !void {
     try writer.writeAll(minimal_ftyp_data);
 
     var atom_len: u32 = moov_len + udta_len + meta_atom_len;
-    try writer.writeIntBig(u32, atom_len);
+    try writer.writeInt(u32, atom_len, .big);
     try writer.writeAll("moov");
     atom_len -= moov_len;
-    try writer.writeIntBig(u32, atom_len);
+    try writer.writeInt(u32, atom_len, .big);
     try writer.writeAll("udta");
 }

@@ -4,10 +4,10 @@ const synchsafe = @import("audiometa").synchsafe;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer assert(gpa.deinit() == false);
+    defer assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
-    var args = try std.process.argsAlloc(allocator);
+    const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
     if (args.len < 2) {

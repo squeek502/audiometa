@@ -13,7 +13,7 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
 
     var metadata_map = &metadata.map;
 
-    var end_pos = try seekable_stream.getPos();
+    const end_pos = try seekable_stream.getPos();
     if (end_pos < tag_size) {
         return error.EndOfStream;
     }
@@ -41,23 +41,23 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
     var utf8_buf: [60]u8 = undefined;
 
     if (song_name.len > 0) {
-        var utf8_song_name = latin1ToUtf8(song_name, &utf8_buf);
+        const utf8_song_name = latin1ToUtf8(song_name, &utf8_buf);
         try metadata_map.put("title", utf8_song_name);
     }
     if (artist.len > 0) {
-        var utf8_artist = latin1ToUtf8(artist, &utf8_buf);
+        const utf8_artist = latin1ToUtf8(artist, &utf8_buf);
         try metadata_map.put("artist", utf8_artist);
     }
     if (album_name.len > 0) {
-        var utf8_album_name = latin1ToUtf8(album_name, &utf8_buf);
+        const utf8_album_name = latin1ToUtf8(album_name, &utf8_buf);
         try metadata_map.put("album", utf8_album_name);
     }
     if (year.len > 0) {
-        var utf8_year = latin1ToUtf8(year, &utf8_buf);
+        const utf8_year = latin1ToUtf8(year, &utf8_buf);
         try metadata_map.put("date", utf8_year);
     }
     if (comment.len > 0) {
-        var utf8_comment = latin1ToUtf8(comment, &utf8_buf);
+        const utf8_comment = latin1ToUtf8(comment, &utf8_buf);
         try metadata_map.put("comment", utf8_comment);
     }
     if (could_be_v1_1 and track_num > 0) {

@@ -39,7 +39,7 @@ fn parseExpectedMetadata(comptime path: []const u8, expected_meta: ExpectedAllMe
 
 fn compareAllMetadata(all_expected: *const ExpectedAllMetadata, all_actual: *const AllMetadata) !void {
     try testing.expectEqual(all_expected.tags.len, all_actual.tags.len);
-    for (all_expected.tags) |expected_tag, i| {
+    for (all_expected.tags, 0..) |expected_tag, i| {
         const actual_tag = all_actual.tags[i];
         try testing.expectEqual(std.meta.activeTag(expected_tag), std.meta.activeTag(actual_tag));
         switch (expected_tag) {
@@ -49,12 +49,12 @@ fn compareAllMetadata(all_expected: *const ExpectedAllMetadata, all_actual: *con
                 try compareEntrySlice(expected_tag.id3v2.user_defined, actual_tag.id3v2.user_defined.entries.items);
 
                 try testing.expectEqual(expected_tag.id3v2.comments.len, actual_tag.id3v2.comments.entries.items.len);
-                for (expected_tag.id3v2.comments) |expected_comment, comment_i| {
+                for (expected_tag.id3v2.comments, 0..) |expected_comment, comment_i| {
                     const actual_comment = actual_tag.id3v2.comments.entries.items[comment_i];
                     try compareFullText(expected_comment, actual_comment);
                 }
                 try testing.expectEqual(expected_tag.id3v2.unsynchronized_lyrics.len, actual_tag.id3v2.unsynchronized_lyrics.entries.items.len);
-                for (expected_tag.id3v2.unsynchronized_lyrics) |expected_lyrics, lyrics_i| {
+                for (expected_tag.id3v2.unsynchronized_lyrics, 0..) |expected_lyrics, lyrics_i| {
                     const actual_lyrics = actual_tag.id3v2.unsynchronized_lyrics.entries.items[lyrics_i];
                     try compareFullText(expected_lyrics, actual_lyrics);
                 }

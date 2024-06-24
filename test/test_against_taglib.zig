@@ -346,22 +346,22 @@ fn mergeDate(metadata: *MetadataMap) !void {
     date = date_buf[0..4];
     std.mem.copy(u8, date, (year.?)[0..4]);
 
-    var maybe_daymonth = metadata.getFirst("TDAT");
+    const maybe_daymonth = metadata.getFirst("TDAT");
     if (isValidDateComponent(maybe_daymonth)) {
         const daymonth = maybe_daymonth.?;
         date = date_buf[0..10];
         // TDAT is DDMM, we want -MM-DD
-        var day = daymonth[0..2];
-        var month = daymonth[2..4];
+        const day = daymonth[0..2];
+        const month = daymonth[2..4];
         _ = try std.fmt.bufPrint(date[4..10], "-{s}-{s}", .{ month, day });
 
-        var maybe_time = metadata.getFirst("TIME");
+        const maybe_time = metadata.getFirst("TIME");
         if (isValidDateComponent(maybe_time)) {
             const time = maybe_time.?;
             date = date_buf[0..];
             // TIME is HHMM
-            var hours = time[0..2];
-            var mins = time[2..4];
+            const hours = time[0..2];
+            const mins = time[2..4];
             _ = try std.fmt.bufPrint(date[10..], "T{s}:{s}", .{ hours, mins });
         }
     }
@@ -404,10 +404,10 @@ fn compareMetadataMapID3v2(allocator: Allocator, expected: *MetadataMap, actual:
             continue;
         } else {
             if (actual_converted.contains(field.name)) {
-                var expected_num_values = expected.valueCount(field.name).?;
+                const expected_num_values = expected.valueCount(field.name).?;
 
                 if (expected_num_values == 1) {
-                    var actual_value = actual_converted.getFirst(field.name).?;
+                    const actual_value = actual_converted.getFirst(field.name).?;
 
                     std.testing.expectEqualStrings(field.value, actual_value) catch |e| {
                         std.debug.print("\nfield: {s}\n", .{fmtUtf8SliceEscapeUpper(field.name)});
@@ -610,7 +610,7 @@ fn compareMetadata(allocator: Allocator, all_expected: *AllMetadata, all_actual:
                 // instead the version it decided to convert the tag to
                 //try testing.expectEqual(expected_tag.id3v2.header.major_version, actual_id3v2.header.major_version);
                 try testing.expectEqual(expected_tag.id3v2.comments.entries.items.len, actual_id3v2.comments.entries.items.len);
-                for (expected_tag.id3v2.comments.entries.items) |expected_comment, comment_i| {
+                for (expected_tag.id3v2.comments.entries.items, 0..) |expected_comment, comment_i| {
                     // TagLib seems to give blank descriptions for blank values, if we see
                     // blank both then skip this one
                     if (expected_comment.description.len == 0 and expected_comment.value.len == 0) {
@@ -619,7 +619,7 @@ fn compareMetadata(allocator: Allocator, all_expected: *AllMetadata, all_actual:
                     const actual_comment = actual_id3v2.comments.entries.items[comment_i];
                     try compareFullText(expected_comment, actual_comment);
                 }
-                for (expected_tag.id3v2.unsynchronized_lyrics.entries.items) |expected_lyrics, lyrics_i| {
+                for (expected_tag.id3v2.unsynchronized_lyrics.entries.items, 0..) |expected_lyrics, lyrics_i| {
                     const actual_lyrics = actual_id3v2.unsynchronized_lyrics.entries.items[lyrics_i];
                     try compareFullText(expected_lyrics, actual_lyrics);
                 }
@@ -713,16 +713,16 @@ fn getTagLibMetadata(allocator: Allocator, cwd: ?std.fs.Dir, filepath: []const u
             var language: ?[]const u8 = null;
             var description: ?[]const u8 = null;
             if (is_comment or is_lyrics) {
-                var start_quote_index = std.mem.indexOf(u8, frames_data, start_value_string).?;
+                const start_quote_index = std.mem.indexOf(u8, frames_data, start_value_string).?;
                 language = frames_data[0..start_quote_index];
                 const description_start = start_quote_index + start_value_string.len;
-                var end_quote_index = std.mem.indexOf(u8, frames_data[description_start..], end_value_string).?;
+                const end_quote_index = std.mem.indexOf(u8, frames_data[description_start..], end_value_string).?;
                 const abs_end_quote_index = description_start + end_quote_index;
                 description = frames_data[description_start..abs_end_quote_index];
                 frames_data = frames_data[abs_end_quote_index + end_value_string.len ..];
             } else if (is_usertext) {
                 const description_start = start_value_string.len;
-                var end_quote_index = std.mem.indexOf(u8, frames_data[description_start..], end_value_string).?;
+                const end_quote_index = std.mem.indexOf(u8, frames_data[description_start..], end_value_string).?;
                 const abs_end_quote_index = description_start + end_quote_index;
                 description = frames_data[description_start..abs_end_quote_index];
                 frames_data = frames_data[abs_end_quote_index + end_value_string.len ..];
@@ -731,11 +731,11 @@ fn getTagLibMetadata(allocator: Allocator, cwd: ?std.fs.Dir, filepath: []const u
             assert(frames_data[0] == '=');
 
             const value_start_index = 1;
-            var start_quote_index = std.mem.indexOf(u8, frames_data[value_start_index..], start_value_string).?;
+            const start_quote_index = std.mem.indexOf(u8, frames_data[value_start_index..], start_value_string).?;
             const abs_after_start_quote_index = value_start_index + start_quote_index + start_value_string.len;
-            var end_quote_index = std.mem.indexOf(u8, frames_data[abs_after_start_quote_index..], end_value_string).?;
+            const end_quote_index = std.mem.indexOf(u8, frames_data[abs_after_start_quote_index..], end_value_string).?;
             const abs_end_quote_index = abs_after_start_quote_index + end_quote_index;
-            var value = frames_data[abs_after_start_quote_index..abs_end_quote_index];
+            const value = frames_data[abs_after_start_quote_index..abs_end_quote_index];
 
             if (is_comment) {
                 try id3v2_metadata.?.comments.put(language.?, description.?, value);
@@ -768,16 +768,16 @@ fn getTagLibMetadata(allocator: Allocator, cwd: ?std.fs.Dir, filepath: []const u
         flac_metadata = Metadata.init(allocator);
 
         while (true) {
-            var equals_index = std.mem.indexOfScalar(u8, flac_data, '=') orelse break;
-            var name = flac_data[0..equals_index];
+            const equals_index = std.mem.indexOfScalar(u8, flac_data, '=') orelse break;
+            const name = flac_data[0..equals_index];
             const value_start_index = equals_index + 1;
             const start_value_string = "[====[";
-            var start_quote_index = std.mem.indexOf(u8, flac_data[value_start_index..], start_value_string) orelse break;
+            const start_quote_index = std.mem.indexOf(u8, flac_data[value_start_index..], start_value_string) orelse break;
             const abs_after_start_quote_index = value_start_index + start_quote_index + start_value_string.len;
             const end_value_string = "]====]";
-            var end_quote_index = std.mem.indexOf(u8, flac_data[abs_after_start_quote_index..], end_value_string) orelse break;
+            const end_quote_index = std.mem.indexOf(u8, flac_data[abs_after_start_quote_index..], end_value_string) orelse break;
             const abs_end_quote_index = abs_after_start_quote_index + end_quote_index;
-            var value = flac_data[abs_after_start_quote_index..abs_end_quote_index];
+            const value = flac_data[abs_after_start_quote_index..abs_end_quote_index];
 
             try flac_metadata.?.map.put(name, value);
 
@@ -802,16 +802,16 @@ fn getTagLibMetadata(allocator: Allocator, cwd: ?std.fs.Dir, filepath: []const u
         vorbis_metadata = Metadata.init(allocator);
 
         while (true) {
-            var equals_index = std.mem.indexOfScalar(u8, vorbis_data, '=') orelse break;
-            var name = vorbis_data[0..equals_index];
+            const equals_index = std.mem.indexOfScalar(u8, vorbis_data, '=') orelse break;
+            const name = vorbis_data[0..equals_index];
             const value_start_index = equals_index + 1;
             const start_value_string = "[====[";
-            var start_quote_index = std.mem.indexOf(u8, vorbis_data[value_start_index..], start_value_string) orelse break;
+            const start_quote_index = std.mem.indexOf(u8, vorbis_data[value_start_index..], start_value_string) orelse break;
             const abs_after_start_quote_index = value_start_index + start_quote_index + start_value_string.len;
             const end_value_string = "]====]";
-            var end_quote_index = std.mem.indexOf(u8, vorbis_data[abs_after_start_quote_index..], end_value_string) orelse break;
+            const end_quote_index = std.mem.indexOf(u8, vorbis_data[abs_after_start_quote_index..], end_value_string) orelse break;
             const abs_end_quote_index = abs_after_start_quote_index + end_quote_index;
-            var value = vorbis_data[abs_after_start_quote_index..abs_end_quote_index];
+            const value = vorbis_data[abs_after_start_quote_index..abs_end_quote_index];
 
             try vorbis_metadata.?.map.put(name, value);
 
@@ -836,16 +836,16 @@ fn getTagLibMetadata(allocator: Allocator, cwd: ?std.fs.Dir, filepath: []const u
         mp4_metadata = Metadata.init(allocator);
 
         while (true) {
-            var equals_index = std.mem.indexOfScalar(u8, mp4_data, '=') orelse break;
-            var name = mp4_data[0..equals_index];
+            const equals_index = std.mem.indexOfScalar(u8, mp4_data, '=') orelse break;
+            const name = mp4_data[0..equals_index];
             const value_start_index = equals_index + 1;
             const start_value_string = "[====[";
-            var start_quote_index = std.mem.indexOf(u8, mp4_data[value_start_index..], start_value_string) orelse break;
+            const start_quote_index = std.mem.indexOf(u8, mp4_data[value_start_index..], start_value_string) orelse break;
             const abs_after_start_quote_index = value_start_index + start_quote_index + start_value_string.len;
             const end_value_string = "]====]";
-            var end_quote_index = std.mem.indexOf(u8, mp4_data[abs_after_start_quote_index..], end_value_string) orelse break;
+            const end_quote_index = std.mem.indexOf(u8, mp4_data[abs_after_start_quote_index..], end_value_string) orelse break;
             const abs_end_quote_index = abs_after_start_quote_index + end_quote_index;
-            var value = mp4_data[abs_after_start_quote_index..abs_end_quote_index];
+            const value = mp4_data[abs_after_start_quote_index..abs_end_quote_index];
 
             try mp4_metadata.?.map.put(name, value);
 

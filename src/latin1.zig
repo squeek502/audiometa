@@ -59,7 +59,7 @@ pub fn utf8ToLatin1Alloc(allocator: Allocator, utf8_text: []const u8) ![]u8 {
     while (utf8_it.nextCodepoint()) |codepoint| {
         // this cast is guaranteed to work since we know the UTF-8 is made up
         // of all Latin-1 characters
-        try buffer.append(@intCast(u8, codepoint));
+        try buffer.append(@intCast(codepoint));
     }
 
     return buffer.toOwnedSlice();
@@ -75,7 +75,7 @@ pub fn utf8ToLatin1(utf8_text: []const u8, buf: []u8) []u8 {
     while (utf8_it.nextCodepoint()) |codepoint| {
         // this cast is guaranteed to work since we know the UTF-8 is made up
         // of all Latin-1 characters
-        buf[i] = @intCast(u8, codepoint);
+        buf[i] = @intCast(codepoint);
         i += 1;
     }
 

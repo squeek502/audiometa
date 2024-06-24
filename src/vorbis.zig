@@ -22,13 +22,13 @@ pub fn readComment(allocator: Allocator, reader: anytype, seekable_stream: anyty
 
     var metadata_map = &metadata.map;
 
-    const vendor_length = try reader.readIntLittle(u32);
+    const vendor_length = try reader.readInt(u32, .little);
     try reader.skipBytes(vendor_length, .{});
 
-    const user_comment_list_length = try reader.readIntLittle(u32);
+    const user_comment_list_length = try reader.readInt(u32, .little);
     var user_comment_index: u32 = 0;
     while (user_comment_index < user_comment_list_length) : (user_comment_index += 1) {
-        const comment_length = try reader.readIntLittle(u32);
+        const comment_length = try reader.readInt(u32, .little);
 
         // short circuit for impossible comment lengths to avoid
         // giant allocations that we know are impossible to read
@@ -37,7 +37,7 @@ pub fn readComment(allocator: Allocator, reader: anytype, seekable_stream: anyty
             return error.EndOfStream;
         }
 
-        var comment = try allocator.alloc(u8, comment_length);
+        const comment = try allocator.alloc(u8, comment_length);
         defer allocator.free(comment);
         try reader.readNoEof(comment);
 
@@ -46,8 +46,8 @@ pub fn readComment(allocator: Allocator, reader: anytype, seekable_stream: anyty
         }
 
         var split_it = std.mem.split(u8, comment, "=");
-        var field = split_it.next() orelse return error.InvalidCommentField;
-        var value = split_it.rest();
+        const field = split_it.next() orelse return error.InvalidCommentField;
+        const value = split_it.rest();
 
         // Vorbis comments are case-insensitive, so always convert them to
         // upper case here in order to make that straightforward on
@@ -69,7 +69,7 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
 
     // identification
     const id_header_type = try ogg_page_reader.readByte();
-    if (id_header_type != @enumToInt(PacketType.identification)) {
+    if (id_header_type != @intFromEnum(PacketType.identification)) {
         return error.UnexpectedHeaderType;
     }
     const id_signature = try ogg_page_reader.readBytesNoEof(codec_id.len);
@@ -84,7 +84,7 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
 
     // comment
     const header_type = try ogg_page_reader.readByte();
-    if (header_type != @enumToInt(PacketType.comment)) {
+    if (header_type != @intFromEnum(PacketType.comment)) {
         return error.UnexpectedHeaderType;
     }
     const comment_signature = try ogg_page_reader.readBytesNoEof(codec_id.len);

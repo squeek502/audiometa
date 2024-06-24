@@ -39,14 +39,14 @@ pub fn readAll(allocator: Allocator, stream_source: *std.io.StreamSource) !AllMe
     // anyway so it's just doing extra work for no reason.
     const buffer_size = 512;
     var buffered_stream_source = BufferedStreamSource(buffer_size).init(stream_source);
-    var reader = buffered_stream_source.reader();
+    const reader = buffered_stream_source.reader();
     var seekable_stream = buffered_stream_source.seekableStream();
 
     var all_metadata = std.ArrayList(TypedMetadata).init(allocator);
     errdefer {
         var cleanup_helper = AllMetadata{
             .allocator = allocator,
-            .tags = all_metadata.toOwnedSlice(),
+            .tags = all_metadata.toOwnedSlice() catch @panic("TODO"),
         };
         cleanup_helper.deinit();
     }
@@ -214,7 +214,7 @@ pub fn readAll(allocator: Allocator, stream_source: *std.io.StreamSource) !AllMe
 
     return AllMetadata{
         .allocator = allocator,
-        .tags = all_metadata.toOwnedSlice(),
+        .tags = try all_metadata.toOwnedSlice(),
     };
 }
 
@@ -361,7 +361,7 @@ pub const AllMetadata = struct {
 
         for (self.tags) |*tag| {
             if (@as(MetadataType, tag.*) == tag_type) {
-                var val = &@field(tag.*, @tagName(tag_type));
+                const val = &@field(tag.*, @tagName(tag_type));
                 try buf.append(val);
             }
         }
@@ -392,7 +392,7 @@ pub const AllMetadata = struct {
     pub fn countIgnoringDuplicates(self: AllMetadata) usize {
         var count: usize = 0;
         inline for (@typeInfo(MetadataType).Enum.fields) |enum_field| {
-            const tag_type = @intToEnum(MetadataType, enum_field.value);
+            const tag_type: MetadataType = @enumFromInt(enum_field.value);
             if (self.getFirstMetadataOfType(tag_type) != null) {
                 count += 1;
             }
@@ -546,7 +546,7 @@ pub const MetadataMap = struct {
                     .found_existing = true,
                 };
             } else {
-                var name_dup = try self.allocator.dupe(u8, name);
+                const name_dup = try self.allocator.dupe(u8, name);
                 errdefer self.allocator.free(name_dup);
 
                 const entry = try self.name_to_indexes.getOrPutValue(self.allocator, name_dup, IndexList{});
@@ -675,7 +675,7 @@ pub const MetadataMap = struct {
         if (entry_index_list.items.len == 0) return null;
 
         const buf = try allocator.alloc([]const u8, entry_index_list.items.len);
-        for (entry_index_list.items) |entry_index, i| {
+        for (entry_index_list.items, 0..) |entry_index, i| {
             buf[i] = self.entries.items[entry_index].value;
         }
         return buf;
@@ -700,7 +700,7 @@ pub const MetadataMap = struct {
             var values = try allocator.alloc([]const u8, entry_index_list.items.len);
             defer allocator.free(values);
 
-            for (entry_index_list.items) |entry_index, i| {
+            for (entry_index_list.items, 0..) |entry_index, i| {
                 values[i] = self.entries.items[entry_index].value;
             }
 
@@ -775,7 +775,7 @@ test "AllMetadata.getXOfType" {
 
     var all = AllMetadata{
         .allocator = allocator,
-        .tags = metadata_buf.toOwnedSlice(),
+        .tags = try metadata_buf.toOwnedSlice(),
     };
     defer all.deinit();
 

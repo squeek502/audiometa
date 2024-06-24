@@ -27,7 +27,6 @@ pub fn DecodedType(comptime T: type) type {
 }
 
 pub fn decode(comptime T: type, x: T) DecodedType(T) {
-    const OutType = DecodedType(T);
     var out: T = 0;
     var mask: T = 0x7F << (@typeInfo(T).Int.bits - 8);
 
@@ -37,7 +36,7 @@ pub fn decode(comptime T: type, x: T) DecodedType(T) {
         mask >>= 8;
     }
 
-    return @truncate(OutType, out);
+    return @truncate(out);
 }
 
 pub fn encode(comptime T: type, x: T) EncodedType(T) {
@@ -93,7 +92,7 @@ pub fn areIntBytesSynchsafe(comptime T: type, x: T) bool {
         const num_bytes = num_bits / 8;
         var mask: T = 1 << 7;
         var i: usize = 1;
-        inline while (i < num_bytes) : (i += 1) {
+        while (i < num_bytes) : (i += 1) {
             mask <<= 8;
             mask |= 1 << 7;
         }

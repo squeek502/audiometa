@@ -47,7 +47,7 @@ pub fn BufferedStreamSource(comptime buffer_size: usize) type {
             if (self.stream_source.seekTo(pos)) {
                 if (self.buffered_reader) |*buffered_reader| {
                     // just discard the buffer completely
-                    buffered_reader.fifo.discard(buffered_reader.fifo.count);
+                    buffered_reader.start = buffered_reader.end;
                 }
             } else |err| {
                 return err;
@@ -56,17 +56,17 @@ pub fn BufferedStreamSource(comptime buffer_size: usize) type {
 
         pub fn seekBy(self: *Self, amt: i64) SeekError!void {
             if (self.buffered_reader) |*buffered_reader| {
-                const amount_buffered = buffered_reader.fifo.count;
+                const amount_buffered = buffered_reader.end - buffered_reader.start;
                 // If we can just skip ahead in the buffer, then do that instead of
                 // actually seeking
                 if (amt > 0 and amt <= amount_buffered) {
-                    buffered_reader.fifo.discard(@intCast(usize, amt));
+                    buffered_reader.start += @intCast(amt);
                 }
                 // Otherwise, we need to seek (adjusted by the amount buffered)
                 // and then discard the buffer if the seek succeeds
                 else if (amt != 0) {
-                    if (self.stream_source.seekBy(amt - @intCast(i64, amount_buffered))) {
-                        buffered_reader.fifo.discard(amount_buffered);
+                    if (self.stream_source.seekBy(amt - @as(i64, @intCast(amount_buffered)))) {
+                        buffered_reader.start += amount_buffered;
                     } else |err| {
                         return err;
                     }
@@ -84,7 +84,7 @@ pub fn BufferedStreamSource(comptime buffer_size: usize) type {
             if (self.stream_source.getPos()) |pos| {
                 // the 'real' pos is offset by the current buffer count
                 if (self.buffered_reader) |*buffered_reader| {
-                    return pos - buffered_reader.fifo.count;
+                    return pos - (buffered_reader.end - buffered_reader.start);
                 }
                 return pos;
             } else |err| {
@@ -112,7 +112,7 @@ test "BufferedStreamSource with file" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.writeFile("testfile", full_contents);
+    try tmp.dir.writeFile(.{ .sub_path = "testfile", .data = full_contents });
 
     var file = try tmp.dir.openFile("testfile", .{});
     defer file.close();

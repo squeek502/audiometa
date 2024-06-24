@@ -57,9 +57,9 @@ pub fn ConstrainedStream(comptime ReaderType: type, comptime SeekableStreamType:
         pub fn seekBy(self: *Self, amt: i64) SeekError!void {
             // TODO: there's probably a better way to do this
             const seek_pos = if (amt >= 0)
-                (self.pos + @intCast(usize, amt))
+                (self.pos + @as(usize, @intCast(amt)))
             else
-                (self.pos - std.math.absCast(amt));
+                (self.pos - @abs(amt));
             if (self.constrained_end_pos) |constrained_end_pos| {
                 if (seek_pos > constrained_end_pos) {
                     return error.EndOfConstrainedStream;
@@ -105,7 +105,7 @@ test "ConstrainedStream with file" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.writeFile("testfile", full_contents);
+    try tmp.dir.writeFile(.{ .sub_path = "testfile", .data = full_contents });
 
     var file = try tmp.dir.openFile("testfile", .{});
     defer file.close();

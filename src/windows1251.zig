@@ -23,7 +23,7 @@ pub fn windows1251AsUtf8ToUtf8Alloc(allocator: Allocator, windows1251_text_as_ut
     var utf8_it = std.unicode.Utf8Iterator{ .bytes = windows1251_text_as_utf8, .i = 0 };
     while (utf8_it.nextCodepoint()) |input_codepoint| {
         // If this cast fails then the UTF-8 text has codepoints outside the extended ASCII range
-        const c = @intCast(u8, input_codepoint);
+        const c: u8 = @intCast(input_codepoint);
         try windows1251ToUtf8Append(&buffer, c);
     }
     return buffer.toOwnedSlice();

@@ -56,22 +56,22 @@ pub const FullTextMap = struct {
     };
 
     pub fn getOrPutIndexesEntries(self: *FullTextMap, language: []const u8, description: []const u8) !LangAndDescEntries {
-        var lang_entry = lang_entry: {
+        const lang_entry = lang_entry: {
             if (self.language_to_indexes.getEntry(language)) |entry| {
                 break :lang_entry entry;
             } else {
-                var lang_dup = try self.allocator.dupe(u8, language);
+                const lang_dup = try self.allocator.dupe(u8, language);
                 errdefer self.allocator.free(lang_dup);
 
                 const entry = try self.language_to_indexes.getOrPutValue(self.allocator, lang_dup, IndexList{});
                 break :lang_entry entry;
             }
         };
-        var desc_entry = desc_entry: {
+        const desc_entry = desc_entry: {
             if (self.description_to_indexes.getEntry(description)) |entry| {
                 break :desc_entry entry;
             } else {
-                var desc_dup = try self.allocator.dupe(u8, description);
+                const desc_dup = try self.allocator.dupe(u8, description);
                 errdefer self.allocator.free(desc_dup);
 
                 const entry = try self.description_to_indexes.getOrPutValue(self.allocator, desc_dup, IndexList{});

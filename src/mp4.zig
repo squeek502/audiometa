@@ -15,7 +15,7 @@ pub const FullAtomHeader = struct {
     pub fn read(reader: anytype) !FullAtomHeader {
         return FullAtomHeader{
             .version = try reader.readByte(),
-            .flags = try reader.readIntBig(u24),
+            .flags = try reader.readInt(u24, .big),
         };
     }
 };
@@ -37,7 +37,7 @@ pub const AtomHeader = struct {
     pub fn read(reader: anytype, seekable_stream: anytype) !AtomHeader {
         var header: AtomHeader = undefined;
         header.extended_size = false;
-        const size_field = try reader.readIntBig(u32);
+        const size_field = try reader.readInt(u32, .big);
         try reader.readNoEof(&header.name);
 
         header.size = switch (size_field) {
@@ -49,7 +49,7 @@ pub const AtomHeader = struct {
             1 => blk: {
                 // a size of 1 means the atom header has an extended size field
                 header.extended_size = true;
-                break :blk try reader.readIntBig(u64);
+                break :blk try reader.readInt(u64, .big);
             },
             else => |size| size,
         };
@@ -100,8 +100,8 @@ pub const DataAtom = struct {
         return DataAtom{
             .header = header,
             .indicators = Indicators{
-                .type_indicator = try reader.readIntBig(u32),
-                .locale_indicator = try reader.readIntBig(u32),
+                .type_indicator = try reader.readInt(u32, .big),
+                .locale_indicator = try reader.readInt(u32, .big),
             },
         };
     }
@@ -114,7 +114,7 @@ pub const DataAtom = struct {
 
         /// Returns the 'type set' identifier of the "type indicator" field.
         fn getTypeSet(self: Indicators) TypeSet {
-            return @intToEnum(TypeSet, (self.type_indicator & 0x0000FF00) >> 8);
+            return @enumFromInt((self.type_indicator & 0x0000FF00) >> 8);
         }
 
         pub const TypeSet = enum(u8) {
@@ -129,8 +129,8 @@ pub const DataAtom = struct {
         fn getBasicType(self: Indicators) ?BasicType {
             switch (self.getTypeSet()) {
                 .basic => {
-                    const basic_type = @intCast(u8, self.type_indicator & 0x000000FF);
-                    return @intToEnum(BasicType, basic_type);
+                    const basic_type: u8 = @intCast(self.type_indicator & 0x000000FF);
+                    return @enumFromInt(basic_type);
                 },
                 else => return null,
             }
@@ -168,7 +168,7 @@ pub const DataAtom = struct {
 
     pub fn readValueAsBytes(self: DataAtom, allocator: Allocator, reader: anytype) ![]u8 {
         const data_size = self.dataSize();
-        var value = try allocator.alloc(u8, data_size);
+        const value = try allocator.alloc(u8, data_size);
         errdefer allocator.free(value);
 
         try reader.readNoEof(value);
@@ -192,7 +192,7 @@ pub fn readMetadataItem(allocator: Allocator, reader: anytype, seekable_stream: 
         // ---- is a special metadata item that has a 'mean' and an optional 'name' atom
         // that describe the meaning as a string
         if (std.mem.eql(u8, "----", &atom_header.name)) {
-            var meaning_string = meaning_string: {
+            const meaning_string = meaning_string: {
                 const mean_header = try AtomHeader.read(reader, seekable_stream);
                 if (!std.mem.eql(u8, "mean", &mean_header.name)) {
                     return error.InvalidDataAtom;
@@ -204,7 +204,7 @@ pub fn readMetadataItem(allocator: Allocator, reader: anytype, seekable_stream: 
                 _ = try FullAtomHeader.read(reader);
 
                 const data_size = mean_header.sizeExcludingHeader() - FullAtomHeader.len;
-                var meaning_string = try allocator.alloc(u8, data_size);
+                const meaning_string = try allocator.alloc(u8, data_size);
                 errdefer allocator.free(meaning_string);
 
                 try reader.readNoEof(meaning_string);
@@ -218,7 +218,7 @@ pub fn readMetadataItem(allocator: Allocator, reader: anytype, seekable_stream: 
             var should_free_meaning_string = true;
             defer if (should_free_meaning_string) allocator.free(meaning_string);
 
-            var name_string = name_string: {
+            const name_string = name_string: {
                 const name_header = try AtomHeader.read(reader, seekable_stream);
                 if (!std.mem.eql(u8, "name", &name_header.name)) {
                     // name is optional, so bail out and try reading the rest as a DataAtom
@@ -235,7 +235,7 @@ pub fn readMetadataItem(allocator: Allocator, reader: anytype, seekable_stream: 
                 _ = try FullAtomHeader.read(reader);
 
                 const data_size = name_header.sizeExcludingHeader() - FullAtomHeader.len;
-                var name_string = try allocator.alloc(u8, data_size);
+                const name_string = try allocator.alloc(u8, data_size);
                 errdefer allocator.free(name_string);
 
                 try reader.readNoEof(name_string);
@@ -285,7 +285,7 @@ pub fn readMetadataItem(allocator: Allocator, reader: anytype, seekable_stream: 
         if (maybe_basic_type) |basic_type| {
             switch (basic_type) {
                 .utf8 => {
-                    var value = try data_atom.readValueAsBytes(allocator, reader);
+                    const value = try data_atom.readValueAsBytes(allocator, reader);
                     defer allocator.free(value);
 
                     if (!std.unicode.utf8ValidateSlice(value)) {
@@ -301,7 +301,7 @@ pub fn readMetadataItem(allocator: Allocator, reader: anytype, seekable_stream: 
                     if (data_atom.dataSize() % 2 != 0) {
                         return error.InvalidUTF16Data;
                     }
-                    var value_bytes = try allocator.alignedAlloc(u8, @alignOf(u16), data_atom.dataSize());
+                    const value_bytes = try allocator.alignedAlloc(u8, @alignOf(u16), data_atom.dataSize());
                     defer allocator.free(value_bytes);
 
                     try reader.readNoEof(value_bytes);
@@ -309,12 +309,12 @@ pub fn readMetadataItem(allocator: Allocator, reader: anytype, seekable_stream: 
                     var value_utf16 = std.mem.bytesAsSlice(u16, value_bytes);
 
                     // swap the bytes to make it little-endian instead of big-endian
-                    for (value_utf16) |c, i| {
+                    for (value_utf16, 0..) |c, i| {
                         value_utf16[i] = @byteSwap(c);
                     }
 
                     // convert to UTF-8
-                    var value_utf8 = std.unicode.utf16leToUtf8Alloc(allocator, value_utf16) catch |err| switch (err) {
+                    const value_utf8 = std.unicode.utf16leToUtf8Alloc(allocator, value_utf16) catch |err| switch (err) {
                         error.OutOfMemory => return error.OutOfMemory,
                         else => return error.InvalidUTF16Data,
                     };
@@ -323,23 +323,16 @@ pub fn readMetadataItem(allocator: Allocator, reader: anytype, seekable_stream: 
                     try metadata.map.put(metadata_item_name, value_utf8);
                 },
                 .be_signed_integer => {
-                    var size = data_atom.dataSize();
+                    const size = data_atom.dataSize();
                     switch (size) {
                         1...4, 8 => {},
                         else => return error.InvalidDataAtom,
                     }
                     var value_buf: [8]u8 = undefined;
-                    var value_bytes = value_buf[0..size];
+                    const value_bytes = value_buf[0..size];
                     try reader.readNoEof(value_bytes);
 
-                    const value_int: i64 = switch (size) {
-                        1 => std.mem.readIntSliceBig(i8, value_bytes),
-                        2 => std.mem.readIntSliceBig(i16, value_bytes),
-                        3 => std.mem.readIntSliceBig(i24, value_bytes),
-                        4 => std.mem.readIntSliceBig(i32, value_bytes),
-                        8 => std.mem.readIntSliceBig(i64, value_bytes),
-                        else => unreachable,
-                    };
+                    const value_int = std.mem.readVarInt(i64, value_bytes, .big);
 
                     const longest_possible_string = "-9223372036854775808";
                     var int_string_buf: [longest_possible_string.len]u8 = undefined;
@@ -359,13 +352,13 @@ pub fn readMetadataItem(allocator: Allocator, reader: anytype, seekable_stream: 
                         var utf8_writer = utf8_fbs.writer();
 
                         // the first 16 bits are unknown
-                        _ = try reader.readIntBig(u16);
+                        _ = try reader.readInt(u16, .big);
                         // second 16 bits is the 'current' number
-                        const current = try reader.readIntBig(u16);
+                        const current = try reader.readInt(u16, .big);
                         // after that is the 'total' number (if present)
                         const maybe_total: ?u16 = total: {
                             if (data_atom.dataSize() >= 6) {
-                                const val = try reader.readIntBig(u16);
+                                const val = try reader.readInt(u16, .big);
                                 break :total if (val != 0) val else null;
                             } else {
                                 break :total null;
@@ -394,7 +387,7 @@ pub fn readMetadataItem(allocator: Allocator, reader: anytype, seekable_stream: 
                         // TODO: This needs verification that this is the correct
                         //       data type / handling of the value (ffmpeg skips
                         //       the first byte, and TagLib reads it as a i16).
-                        const genre_id_plus_one = try reader.readIntBig(u16);
+                        const genre_id_plus_one = try reader.readInt(u16, .big);
                         if (genre_id_plus_one > 0 and genre_id_plus_one <= id3v1.id3v1_genre_names.len) {
                             const genre_id = genre_id_plus_one - 1;
                             const genre_name = id3v1.id3v1_genre_names[genre_id];
@@ -653,7 +646,7 @@ pub fn readFullAtomIntoArrayList(allocator: Allocator, _reader: anytype, _seekab
 
     const start_pos = try _seekable_stream.getPos();
     var constrained_stream = constrainedStream(start_pos, _reader, _seekable_stream);
-    var constrained_reader = constrained_stream.reader();
+    const constrained_reader = constrained_stream.reader();
     var constrained_seekable_stream = constrained_stream.seekableStream();
 
     var atom_it = AtomTreeIterator.init(allocator);
@@ -794,7 +787,7 @@ pub fn readAll(allocator: Allocator, reader: anytype, seekable_stream: anytype) 
 
     var num_atoms_read: usize = 0;
     while (true) : (num_atoms_read += 1) {
-        var start_pos = try seekable_stream.getPos();
+        const start_pos = try seekable_stream.getPos();
         readFullAtomIntoArrayList(allocator, reader, seekable_stream, &all_metadata) catch |err| switch (err) {
             // If we hit parse errors, we only want to return the error if we haven't
             // read anything successfully
@@ -830,8 +823,8 @@ fn seekByExtended(seekable_stream: anytype, amount: u64) !void {
     } else {
         var remaining = amount;
         while (remaining > 0) {
-            const seek_amt = std.math.min(remaining, std.math.maxInt(u32));
-            try seekable_stream.seekBy(@intCast(u32, seek_amt));
+            const seek_amt = @min(remaining, std.math.maxInt(u32));
+            try seekable_stream.seekBy(@intCast(seek_amt));
             remaining -= seek_amt;
         }
     }
@@ -849,7 +842,7 @@ test "seekByExtended" {
             ctx: *Self,
 
             pub fn seekBy(self: @This(), amt: i64) !void {
-                self.ctx.pos += @intCast(u32, amt);
+                self.ctx.pos += @intCast(amt);
             }
         };
     };
@@ -1093,31 +1086,31 @@ test "one moov tree with multiple metadata atoms" {
     const meta_len = AtomHeader.len + FullAtomHeader.len;
     const ilst_len = AtomHeader.len;
 
-    const meta_atom_len = meta_len + ilst_len + @intCast(u32, metadata_data.len);
+    const meta_atom_len = meta_len + ilst_len + metadata_data.len;
     var atom_len: u32 = moov_len + udta_len + meta_atom_len * 2;
-    try writer.writeIntBig(u32, atom_len);
+    try writer.writeInt(u32, atom_len, .big);
     try writer.writeAll("moov");
     atom_len -= moov_len;
-    try writer.writeIntBig(u32, atom_len);
+    try writer.writeInt(u32, atom_len, .big);
     try writer.writeAll("udta");
     atom_len = meta_atom_len;
-    try writer.writeIntBig(u32, atom_len);
+    try writer.writeInt(u32, atom_len, .big);
     try writer.writeAll("meta");
     try writer.writeByte(1);
-    try writer.writeIntBig(u24, 0);
+    try writer.writeInt(u24, 0, .big);
     atom_len -= meta_len;
-    try writer.writeIntBig(u32, atom_len);
+    try writer.writeInt(u32, atom_len, .big);
     try writer.writeAll("ilst");
     try writer.writeAll(metadata_data);
 
     // second meta within the udta
     atom_len = meta_atom_len;
-    try writer.writeIntBig(u32, atom_len);
+    try writer.writeInt(u32, atom_len, .big);
     try writer.writeAll("meta");
     try writer.writeByte(1);
-    try writer.writeIntBig(u24, 0);
+    try writer.writeInt(u24, 0, .big);
     atom_len -= meta_len;
-    try writer.writeIntBig(u32, atom_len);
+    try writer.writeInt(u32, atom_len, .big);
     try writer.writeAll("ilst");
     try writer.writeAll(metadata_data);
 
@@ -1162,19 +1155,19 @@ fn writeTestMoovData(writer: anytype, metadata_payload: []const u8) !void {
     const meta_len = AtomHeader.len + FullAtomHeader.len;
     const ilst_len = AtomHeader.len;
 
-    var atom_len: u32 = moov_len + udta_len + meta_len + ilst_len + @intCast(u32, metadata_payload.len);
-    try writer.writeIntBig(u32, atom_len);
+    var atom_len: u32 = moov_len + udta_len + meta_len + ilst_len + @as(u32, @intCast(metadata_payload.len));
+    try writer.writeInt(u32, atom_len, .big);
     try writer.writeAll("moov");
     atom_len -= moov_len;
-    try writer.writeIntBig(u32, atom_len);
+    try writer.writeInt(u32, atom_len, .big);
     try writer.writeAll("udta");
     atom_len -= udta_len;
-    try writer.writeIntBig(u32, atom_len);
+    try writer.writeInt(u32, atom_len, .big);
     try writer.writeAll("meta");
     try writer.writeByte(1);
-    try writer.writeIntBig(u24, 0);
+    try writer.writeInt(u24, 0, .big);
     atom_len -= meta_len;
-    try writer.writeIntBig(u32, atom_len);
+    try writer.writeInt(u32, atom_len, .big);
     try writer.writeAll("ilst");
 
     try writer.writeAll(metadata_payload);

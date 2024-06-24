@@ -15,7 +15,7 @@ pub const buffered_stream_source = @import("buffered_stream_source.zig");
 pub const constrained_stream = @import("constrained_stream.zig");
 pub const util = @import("util.zig");
 pub const collate = @import("collate.zig");
-pub const ziglyph = @import("ziglyph");
+pub const case_fold = @import("case_fold.zig");
 
 test {
     std.testing.refAllDecls(@This());

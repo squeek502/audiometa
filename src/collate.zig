@@ -6,7 +6,7 @@ const AllMetadata = metadata_namespace.AllMetadata;
 const MetadataType = metadata_namespace.MetadataType;
 const TypedMetadata = metadata_namespace.TypedMetadata;
 const id3v2_data = @import("id3v2_data.zig");
-const ziglyph = @import("ziglyph");
+const case_fold = @import("case_fold.zig");
 const windows1251 = @import("windows1251.zig");
 const fields = @import("fields.zig");
 
@@ -16,24 +16,18 @@ pub const Collator = struct {
     arena: std.heap.ArenaAllocator,
     config: Config,
     tag_indexes_by_priority: []usize,
-    normalizer: ?*ziglyph.Normalizer,
 
     const Self = @This();
 
     pub const Config = struct {
         prioritization: Prioritization = default_prioritization,
         duplicate_tag_strategy: DuplicateTagStrategy = .prioritize_best,
-        /// If a normalizer is provided, it will allow for de-duplicating across
-        /// different-but-equal UTF-8 grapheme forms. For example:
-        /// - é (U+00E9 LATIN SMALL LETTER E WITH ACUTE)
-        /// - e (U+0065 LATIN SMALL LETTER E) followed by U+0301 COMBINING ACUTE ACCENT
-        ///
-        /// However, the normalizer has a heavy cost to initialize, so:
-        /// - It is optional, so that it only needs to be constructed if normalization
-        ///   is desired
-        /// - It is taken as a pointer so that it's possible to re-use the same
-        ///   Normalizer instance across multiple Collator instances
-        utf8_normalizer: ?*ziglyph.Normalizer = null,
+
+        // TODO: Reinstate normalization
+        // /// If a normalizer is provided, it will allow for de-duplicating across
+        // /// different-but-equal UTF-8 grapheme forms. For example:
+        // /// - é (U+00E9 LATIN SMALL LETTER E WITH ACUTE)
+        // /// - e (U+0065 LATIN SMALL LETTER E) followed by U+0301 COMBINING ACUTE ACCENT
 
         pub const DuplicateTagStrategy = enum {
             /// Use a heuristic to prioritize the 'best' tag for any tag types with multiple tags,
@@ -61,7 +55,6 @@ pub const Collator = struct {
             .arena = std.heap.ArenaAllocator.init(allocator),
             .config = config,
             .tag_indexes_by_priority = &[_]usize{},
-            .normalizer = config.utf8_normalizer,
         };
         errdefer collator.deinit();
 
@@ -113,8 +106,8 @@ pub const Collator = struct {
                         compare_index -= 1;
                     }
                     if (insertion_index != priority_index) {
-                        var to_shift = tag_indexes_by_priority[insertion_index..priority_index];
-                        var dest = tag_indexes_by_priority[insertion_index + 1 .. priority_index + 1];
+                        const to_shift = tag_indexes_by_priority[insertion_index..priority_index];
+                        const dest = tag_indexes_by_priority[insertion_index + 1 .. priority_index + 1];
                         std.mem.copyBackwards(usize, dest, to_shift);
                     }
                 }
@@ -177,7 +170,7 @@ pub const Collator = struct {
 
                 const tag_index = self.collator.tag_indexes_by_priority[self.priority_index];
                 const tag = &self.collator.metadata.tags[tag_index];
-                const tag_keys = self.keys[@enumToInt(std.meta.activeTag(tag.*))];
+                const tag_keys = self.keys[@intFromEnum(std.meta.activeTag(tag.*))];
 
                 if (self.value_iterator) |*value_iterator| {
                     if (value_iterator.next()) |value| {
@@ -225,7 +218,7 @@ pub const Collator = struct {
     }
 
     pub fn getValuesFromKeys(self: *Self, keys: fields.NameLookups) Allocator.Error![][]const u8 {
-        var set = CollatedTextSet.init(self.arena.allocator(), self.config.utf8_normalizer);
+        var set = CollatedTextSet.init(self.arena.allocator());
         defer set.deinit();
 
         var value_it = self.prioritizedValueIterator(keys);
@@ -350,7 +343,7 @@ pub const Collator = struct {
             track_numbers: {
                 if (is_last_resort and track_number_set.count() != 0) break :track_numbers;
 
-                const tag_keys = fields.track_number[@enumToInt(meta_type)] orelse break :track_numbers;
+                const tag_keys = fields.track_number[@intFromEnum(meta_type)] orelse break :track_numbers;
                 for (tag_keys) |key| {
                     var value_it = tag.getMetadata().map.valueIterator(key);
                     while (value_it.next()) |track_number_as_string| {
@@ -367,7 +360,7 @@ pub const Collator = struct {
             track_totals: {
                 if (is_last_resort and track_total_set.count() != 0) break :track_totals;
 
-                const tag_keys = fields.track_total[@enumToInt(meta_type)] orelse break :track_totals;
+                const tag_keys = fields.track_total[@intFromEnum(meta_type)] orelse break :track_totals;
                 for (tag_keys) |key| {
                     var value_it = tag.getMetadata().map.valueIterator(key);
                     while (value_it.next()) |track_total_as_string| {
@@ -380,8 +373,8 @@ pub const Collator = struct {
             }
         }
 
-        var numbers = try self.arena.allocator().dupe(u32, track_number_set.keys());
-        var totals = try self.arena.allocator().dupe(u32, track_total_set.keys());
+        const numbers = try self.arena.allocator().dupe(u32, track_number_set.keys());
+        const totals = try self.arena.allocator().dupe(u32, track_total_set.keys());
 
         return TrackNumbers{
             .numbers = numbers,
@@ -400,7 +393,7 @@ pub const Prioritization = struct {
     };
 
     pub fn priority(self: Prioritization, meta_type: MetadataType) Priority {
-        return self.priorities[@enumToInt(meta_type)];
+        return self.priorities[@intFromEnum(meta_type)];
     }
 };
 
@@ -408,7 +401,7 @@ pub const default_prioritization = Prioritization{
     .order = [_]MetadataType{ .mp4, .flac, .vorbis, .id3v2, .ape, .id3v1 },
     .priorities = init: {
         var priorities = [_]Prioritization.Priority{.normal} ** MetadataType.num_types;
-        priorities[@enumToInt(MetadataType.id3v1)] = .last_resort;
+        priorities[@intFromEnum(MetadataType.id3v1)] = .last_resort;
         break :init priorities;
     },
 };
@@ -417,7 +410,7 @@ fn buildMetadata(allocator: Allocator, comptime types: []const MetadataType, com
     var metadata_buf = std.ArrayList(TypedMetadata).init(allocator);
     defer metadata_buf.deinit();
 
-    inline for (types) |meta_type, i| {
+    inline for (types, 0..) |meta_type, i| {
         switch (meta_type) {
             .id3v2 => {
                 try metadata_buf.append(TypedMetadata{ .id3v2 = .{
@@ -455,12 +448,12 @@ fn buildMetadata(allocator: Allocator, comptime types: []const MetadataType, com
 
     return AllMetadata{
         .allocator = allocator,
-        .tags = metadata_buf.toOwnedSlice(),
+        .tags = try metadata_buf.toOwnedSlice(),
     };
 }
 
 test "PrioritizedValueIterator" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
     var all = try buildMetadata(
         allocator,
         &[_]MetadataType{
@@ -509,7 +502,7 @@ test "PrioritizedValueIterator" {
 }
 
 test "id3v2.2 frames work" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
     var all = try buildMetadata(
         allocator,
         &[_]MetadataType{
@@ -530,7 +523,7 @@ test "id3v2.2 frames work" {
 }
 
 test "prioritization last resort" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
     var all = try buildMetadata(
         allocator,
         &[_]MetadataType{
@@ -553,7 +546,7 @@ test "prioritization last resort" {
 }
 
 test "prioritization flac > ape" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
     var all = try buildMetadata(
         allocator,
         &[_]MetadataType{
@@ -579,7 +572,7 @@ test "prioritization flac > ape" {
 }
 
 test "duplicate_tag_strategy: prioritize_best" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
     var all = try buildMetadata(
         allocator,
         &[_]MetadataType{
@@ -623,7 +616,7 @@ test "duplicate_tag_strategy: prioritize_best" {
 }
 
 test "duplicate_tag_strategy: prioritize_first" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
     var all = try buildMetadata(
         allocator,
         &[_]MetadataType{
@@ -664,7 +657,7 @@ test "duplicate_tag_strategy: prioritize_first" {
 }
 
 test "duplicate_tag_strategy: ignore_duplicates" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
     var all = try buildMetadata(
         allocator,
         &[_]MetadataType{
@@ -708,7 +701,7 @@ test "duplicate_tag_strategy: ignore_duplicates" {
 }
 
 test "track number" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
     var all = try buildMetadata(
         allocator,
         &[_]MetadataType{
@@ -732,7 +725,7 @@ test "track number" {
 }
 
 test "track number but total is separate" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
     var all = try buildMetadata(
         allocator,
         &[_]MetadataType{
@@ -760,7 +753,7 @@ test "track number but total is separate" {
 }
 
 test "track numbers" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
     var all = try buildMetadata(
         allocator,
         &[_]MetadataType{
@@ -844,18 +837,16 @@ const CollatedTextSet = struct {
     // TODO: Maybe do case-insensitivity/normalization during
     //       hash/eql instead
     normalized_set: std.StringHashMapUnmanaged(usize),
-    normalizer: ?*ziglyph.Normalizer,
     arena: Allocator,
 
     const Self = @This();
 
     /// Allocator must be an arena that will get cleaned up outside of
     /// this struct (this struct's deinit will not handle cleaning up the arena)
-    pub fn init(arena: Allocator, normalizer: ?*ziglyph.Normalizer) Self {
+    pub fn init(arena: Allocator) Self {
         return .{
             .values = std.ArrayListUnmanaged([]const u8){},
             .normalized_set = std.StringHashMapUnmanaged(usize){},
-            .normalizer = normalizer,
             .arena = arena,
         };
     }
@@ -868,37 +859,16 @@ const CollatedTextSet = struct {
 
     pub fn put(self: *Self, value: []const u8) Allocator.Error!void {
         const ameliorated_canonical = (try ameliorateCanonical(self.arena, value)) orelse return;
-        const lowered = ziglyph.toCaseFoldStr(self.arena, ameliorated_canonical) catch |err| switch (err) {
+        var case_fold_buf = try std.ArrayList(u8).initCapacity(self.arena, ameliorated_canonical.len);
+
+        case_fold.caseFoldUtf8Writer(case_fold_buf.writer(), ameliorated_canonical) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            // Assert that the Utf-8 is valid
-            error.Utf8CannotEncodeSurrogateHalf,
-            error.CodepointTooLarge,
-            error.InvalidUtf8,
-            => unreachable,
         };
 
-        // Only normalize if we have a normalizer
-        const normalized = normalized: {
-            if (self.normalizer) |normalizer| {
-                break :normalized normalizer.normalizeTo(.canon, lowered) catch |err| switch (err) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                    // normalizeTo uses anyerror for unknown reasons, this might
-                    // be wrong but I'm assuming that they are all related to
-                    // invalid Utf-8 which this assumes to be impossible to hit
-                    else => unreachable,
-                };
-            }
-            break :normalized lowered;
-        };
-        const result = try self.normalized_set.getOrPut(self.arena, normalized);
+        // TODO: Unicode normalization
+
+        const result = try self.normalized_set.getOrPut(self.arena, case_fold_buf.items);
         if (!result.found_existing) {
-            // We need to dupe the normalized version of the string when
-            // storing it because ziglyph.Normalizer creates an arena and
-            // destroys the arena on normalizer.deinit(), which would
-            // destroy the normalized version of the string that was
-            // used as the key for the normalized_set.
-            result.key_ptr.* = try self.arena.dupe(u8, normalized);
-
             const index = self.values.items.len;
             try self.values.append(self.arena, ameliorated_canonical);
             result.value_ptr.* = index;
@@ -914,7 +884,7 @@ test "CollatedTextSet utf-8 case-insensitivity" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    var set = CollatedTextSet.init(arena.allocator(), null);
+    var set = CollatedTextSet.init(arena.allocator());
     defer set.deinit();
 
     try set.put("something");
@@ -929,13 +899,13 @@ test "CollatedTextSet utf-8 case-insensitivity" {
 }
 
 test "CollatedTextSet utf-8 normalization" {
+    // TODO: Reinstate normalization and re-enable
+    if (true) return error.SkipZigTest;
+
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    var normalizer = try ziglyph.Normalizer.init(std.testing.allocator);
-    defer normalizer.deinit();
-
-    var set = CollatedTextSet.init(arena.allocator(), &normalizer);
+    var set = CollatedTextSet.init(arena.allocator());
     defer set.deinit();
 
     try set.put("foé");
@@ -948,7 +918,7 @@ test "CollatedTextSet windows-1251 detection" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    var set = CollatedTextSet.init(arena.allocator(), null);
+    var set = CollatedTextSet.init(arena.allocator());
     defer set.deinit();
 
     // Note: the Latin-1 bytes here are "\xC0\xEF\xEE\xF1\xF2\xF0\xEE\xF4"

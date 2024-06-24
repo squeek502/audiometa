@@ -37,7 +37,7 @@ pub const ID3Header = struct {
         if (!std.mem.eql(u8, header[0..3], identifier)) {
             return error.InvalidIdentifier;
         }
-        const synchsafe_size = std.mem.readIntSliceBig(u32, header[6..10]);
+        const synchsafe_size = std.mem.readInt(u32, header[6..10], .big);
         return ID3Header{
             .major_version = header[3],
             .revision_num = header[4],
@@ -85,7 +85,7 @@ pub const FrameHeader = struct {
         switch (major_version) {
             0...2 => {
                 const header = try reader.readBytesNoEof(6);
-                var size = std.mem.readIntSliceBig(u24, header[3..6]);
+                const size = std.mem.readInt(u24, header[3..6], .big);
                 return FrameHeader{
                     .id = [_]u8{ header[0], header[1], header[2], '\x00' },
                     .size = size,
@@ -96,7 +96,7 @@ pub const FrameHeader = struct {
             },
             else => {
                 const header = try reader.readBytesNoEof(10);
-                const raw_size = std.mem.readIntSliceBig(u32, header[4..8]);
+                const raw_size = std.mem.readInt(u32, header[4..8], .big);
                 const size = if (major_version >= 4) synchsafe.decode(u32, raw_size) else raw_size;
                 return FrameHeader{
                     .id = [_]u8{ header[0], header[1], header[2], header[3] },
@@ -121,7 +121,7 @@ pub const FrameHeader = struct {
         //const invalid_length_min: usize = if (self.has_data_length_indicator()) 4 else 0;
         //if (self.size <= invalid_length_min) return error.FrameTooShort;
         if (self.size > max_size) return error.FrameTooLong;
-        for (self.idSlice(major_version)) |c, i| switch (c) {
+        for (self.idSlice(major_version), 0..) |c, i| switch (c) {
             'A'...'Z', '0'...'9' => {},
             else => {
                 // This is a hack to allow for v2.2 (3 char) ids to be read in v2.3 tags
@@ -211,12 +211,12 @@ pub const EncodedTextIterator = struct {
     pub fn init(allocator: Allocator, reader: anytype, options: Options) !Self {
         // always align to u16 just so that UTF-16 data is easy to work with
         // but alignCast it back to u8 so that it's also easy to work with non-UTF-16 data
-        var raw_text_data = @alignCast(1, try allocator.allocWithOptions(u8, options.text_data_size, u16_align, null));
+        var raw_text_data = try allocator.allocWithOptions(u8, options.text_data_size, u16_align, null);
         errdefer allocator.free(raw_text_data);
 
-        try reader.readNoEof(raw_text_data);
+        try reader.readNoEof(@alignCast(raw_text_data));
 
-        var text_bytes = raw_text_data;
+        var text_bytes: []u8 = @alignCast(raw_text_data);
         if (options.frame_is_unsynch) {
             // This is safe since unsynch decoding is guaranteed to
             // never shift the beginning of the slice, so the alignment
@@ -234,7 +234,14 @@ pub const EncodedTextIterator = struct {
 
         // If the text is latin1, then convert it to UTF-8
         if (options.encoding == .iso_8859_1) {
-            var utf8_text = try latin1.latin1ToUtf8Alloc(allocator, text_bytes);
+            const utf8_text = utf8_text: {
+                const utf8_text = try latin1.latin1ToUtf8Alloc(allocator, text_bytes);
+                defer allocator.free(utf8_text);
+                // TODO: Avoid this extra allocation
+                const utf8_aligned = try allocator.allocWithOptions(u8, utf8_text.len, u16_align, null);
+                @memcpy(utf8_aligned, utf8_text);
+                break :utf8_text utf8_aligned;
+            };
 
             // the utf8 data is now the raw_text_data
             allocator.free(raw_text_data);
@@ -264,8 +271,16 @@ pub const EncodedTextIterator = struct {
         };
     }
 
+    fn bytesAlign(encoding: TextEncoding) u29 {
+        return switch (encoding.charSize()) {
+            1 => @alignOf(u8),
+            2 => @alignOf(u16),
+            else => unreachable,
+        };
+    }
+
     pub fn deinit(self: *Self) void {
-        self.allocator.free(self.raw_text_data);
+        self.allocator.free(@as([]align(u16_align) const u8, @alignCast(self.raw_text_data)));
         self.allocator.free(self.utf8_buf);
     }
 
@@ -292,7 +307,7 @@ pub const EncodedTextIterator = struct {
                     }
                 },
                 2 => {
-                    var bytes_as_utf16 = @alignCast(u16_align, std.mem.bytesAsSlice(u16, self.text_bytes));
+                    const bytes_as_utf16: []u16 = @alignCast(std.mem.bytesAsSlice(u16, self.text_bytes));
                     const delimiter: u16 = 0;
                     if (std.mem.indexOfScalarPos(u16, bytes_as_utf16, start / 2, delimiter)) |delim_start| {
                         self.index = index: {
@@ -328,7 +343,7 @@ pub const EncodedTextIterator = struct {
     /// and will be overwritten on subsequent calls to `next`.
     fn nextToUtf8(self: Self, val_bytes: []u8) error{ InvalidUTF16BOM, InvalidUTF16Data, InvalidUTF8Data }![]const u8 {
         if (self.encoding.charSize() == 2) {
-            var bytes_as_utf16 = @alignCast(u16_align, std.mem.bytesAsSlice(u16, val_bytes));
+            const bytes_as_utf16: []u16 = @alignCast(std.mem.bytesAsSlice(u16, val_bytes));
             var val_no_bom = bytes_as_utf16;
             if (self.encoding == .utf16_with_bom) {
                 // If it's zero-length and missing the BOM then that's
@@ -341,7 +356,7 @@ pub const EncodedTextIterator = struct {
                 // if this is big endian, then swap everything to little endian
                 // TODO: I feel like this probably won't handle big endian native architectures correctly
                 if (bytes_as_utf16[0] == 0xFFFE) {
-                    for (bytes_as_utf16) |c, i| {
+                    for (bytes_as_utf16, 0..) |c, i| {
                         bytes_as_utf16[i] = @byteSwap(c);
                     }
                 }
@@ -380,7 +395,7 @@ pub fn readTextFrameCommon(unsynch_capable_reader: anytype, frame_header: *Frame
         if (text_data_size < 4) {
             return error.UnexpectedTextDataEnd;
         }
-        //const frame_data_length_raw = try unsynch_capable_reader.readIntBig(u32);
+        //const frame_data_length_raw = try unsynch_capable_reader.readInt(u32, .big);
         //const frame_data_length = synchsafe.decode(u32, frame_data_length_raw);
         try unsynch_capable_reader.skipBytes(4, .{});
         text_data_size -= 4;
@@ -626,7 +641,7 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !ID
 
     var metadata_id3v2_container = ID3v2Metadata.init(allocator, id3_header, start_offset, end_offset);
     errdefer metadata_id3v2_container.deinit();
-    var metadata = &metadata_id3v2_container.metadata;
+    const metadata = &metadata_id3v2_container.metadata;
 
     // ID3v2.2 compression should just be skipped according to the spec
     if (id3_header.compressed()) {
@@ -676,7 +691,7 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !ID
 
     // Skip past extended header if it exists
     if (id3_header.hasExtendedHeader()) {
-        const extended_header_size: u32 = try unsynch_capable_reader.readIntBig(u32);
+        const extended_header_size: u32 = try unsynch_capable_reader.readInt(u32, .big);
         // In ID3v2.4, extended header size is a synchsafe integer and includes the size bytes
         // in its reported size. In earlier versions, it is not synchsafe and excludes the size bytes.
         const remaining_extended_header_size = remaining: {
@@ -699,12 +714,12 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !ID
     while (cur_pos < tag_end_with_enough_space_for_valid_frame) : (cur_pos = try seekable_stream.getPos()) {
         var frame_header = try FrameHeader.read(unsynch_capable_reader, id3_header.major_version);
 
-        var frame_data_start_pos = try seekable_stream.getPos();
+        const frame_data_start_pos = try seekable_stream.getPos();
         // It's possible for full unsynch tags to advance the position more than
         // the frame header length since the header itself is decoded while it's
         // read. If we read such that `frame_data_start_pos > metadata.end_offset`,
         // then treat it as 0 remaining size.
-        var remaining_tag_size = std.math.sub(usize, metadata.end_offset, frame_data_start_pos) catch 0;
+        const remaining_tag_size = std.math.sub(usize, metadata.end_offset, frame_data_start_pos) catch 0;
 
         // validate frame_header and bail out if its too crazy
         frame_header.validate(id3_header.major_version, remaining_tag_size) catch {
@@ -741,12 +756,12 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !ID
 
 /// Expects the seekable_stream position to be at the end of the footer that is being read.
 pub fn readFromFooter(allocator: Allocator, reader: anytype, seekable_stream: anytype) !ID3v2Metadata {
-    var end_pos = try seekable_stream.getPos();
+    const end_pos = try seekable_stream.getPos();
     if (end_pos < ID3Header.len) {
         return error.EndOfStream;
     }
 
-    try seekable_stream.seekBy(-@intCast(i64, ID3Header.len));
+    try seekable_stream.seekBy(-@as(i64, @intCast(ID3Header.len)));
     const footer = try ID3Header.readFooter(reader);
 
     // header len + size + footer len

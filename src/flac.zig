@@ -6,7 +6,7 @@ const vorbis = @import("vorbis.zig");
 pub const flac_stream_marker = "fLaC";
 pub const block_type_vorbis_comment = 4;
 
-/// Expects the stream to be at the start of the FLAC stream marker (i.e. 
+/// Expects the stream to be at the start of the FLAC stream marker (i.e.
 /// any ID3v2 tags must be skipped before calling this function)
 pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Metadata {
     var stream_marker = try reader.readBytesNoEof(4);
@@ -18,7 +18,7 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
         const first_byte = try reader.readByte();
         const is_last_metadata_block = first_byte & @as(u8, 1 << 7) != 0;
         const block_type = first_byte & 0x7F;
-        const length = try reader.readIntBig(u24);
+        const length = try reader.readInt(u24, .big);
 
         // short circuit for impossible comment lengths to avoid
         // giant allocations that we know are impossible to read
@@ -35,7 +35,7 @@ pub fn read(allocator: Allocator, reader: anytype, seekable_stream: anytype) !Me
             // and then wrap it in a FixedBufferStream so that we can
             // get bounds-checking in our read calls when reading the
             // comment without any special casing
-            var comments = try allocator.alloc(u8, length);
+            const comments = try allocator.alloc(u8, length);
             defer allocator.free(comments);
             try reader.readNoEof(comments);
 

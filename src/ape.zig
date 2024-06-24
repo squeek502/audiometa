@@ -18,10 +18,10 @@ pub const APEHeader = struct {
             return error.InvalidIdentifier;
         }
         return APEHeader{
-            .version = std.mem.readIntSliceLittle(u32, header[8..12]),
-            .tag_size = std.mem.readIntSliceLittle(u32, header[12..16]),
-            .item_count = std.mem.readIntSliceLittle(u32, header[16..20]),
-            .flags = APETagFlags{ .flags = std.mem.readIntSliceLittle(u32, header[20..24]) },
+            .version = std.mem.readInt(u32, header[8..12], .little),
+            .tag_size = std.mem.readInt(u32, header[12..16], .little),
+            .item_count = std.mem.readInt(u32, header[16..20], .little),
+            .flags = APETagFlags{ .flags = std.mem.readInt(u32, header[20..24], .little) },
             // last 8 bytes are reserved, we can just assume they are zero
             // since erroring if they are non-zero seems unnecessary
         };
@@ -97,12 +97,12 @@ pub fn readFromHeader(allocator: Allocator, reader: anytype, seekable_stream: an
 
 /// Expects the seekable_stream position to be at the end of the footer that is being read.
 pub fn readFromFooter(allocator: Allocator, reader: anytype, seekable_stream: anytype) !APEMetadata {
-    var end_pos = try seekable_stream.getPos();
+    const end_pos = try seekable_stream.getPos();
     if (end_pos < APEHeader.len) {
         return error.EndOfStream;
     }
 
-    try seekable_stream.seekBy(-@intCast(i64, APEHeader.len));
+    try seekable_stream.seekBy(-@as(i64, @intCast(APEHeader.len)));
     const footer = try APEHeader.read(reader);
 
     // the size is meant to include the footer, so if it doesn't
@@ -145,7 +145,7 @@ pub fn readItems(allocator: Allocator, reader: anytype, seekable_stream: anytype
     const end_of_items_offset_with_space_for_item = end_of_items_offset - 9;
     var i: usize = 0;
     while (i < ape_metadata.header_or_footer.item_count and try seekable_stream.getPos() < end_of_items_offset_with_space_for_item) : (i += 1) {
-        const value_size = try reader.readIntLittle(u32);
+        const value_size = try reader.readInt(u32, .little);
 
         // short circuit for impossibly long values, no need to actually
         // allocate and try reading them
@@ -154,12 +154,12 @@ pub fn readItems(allocator: Allocator, reader: anytype, seekable_stream: anytype
             return error.EndOfStream;
         }
 
-        const item_flags = APETagFlags{ .flags = try reader.readIntLittle(u32) };
+        const item_flags = APETagFlags{ .flags = try reader.readInt(u32, .little) };
         switch (item_flags.itemDataType()) {
             .utf8 => {
                 const key = try reader.readUntilDelimiterAlloc(allocator, '\x00', end_of_items_offset - try seekable_stream.getPos());
                 defer allocator.free(key);
-                var value = try allocator.alloc(u8, value_size);
+                const value = try allocator.alloc(u8, value_size);
                 defer allocator.free(value);
                 try reader.readNoEof(value);
 

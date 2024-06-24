@@ -117,11 +117,11 @@ pub fn coalesceMetadata(allocator: Allocator, metadata: *AllMetadata) !MetadataM
         while (names_it.next()) |raw_name| {
             // vorbis metadata fields are case-insensitive, so convert to uppercase
             // for the lookup
-            var upper_field = try std.ascii.allocUpperString(allocator, raw_name.*);
+            const upper_field = try std.ascii.allocUpperString(allocator, raw_name.*);
             defer allocator.free(upper_field);
 
             const name = flac_field_names.get(upper_field) orelse raw_name.*;
-            var joined_value = (try flac_metadata.map.getJoinedAlloc(allocator, raw_name.*, ";")).?;
+            const joined_value = (try flac_metadata.map.getJoinedAlloc(allocator, raw_name.*, ";")).?;
             defer allocator.free(joined_value);
 
             try coalesced.put(name, joined_value);
@@ -198,22 +198,22 @@ fn mergeDate(metadata: *MetadataMap) !void {
     date = date_buf[0..4];
     std.mem.copy(u8, date, (year.?)[0..4]);
 
-    var maybe_daymonth = metadata.getFirst("TDAT") orelse metadata.getFirst("TDA");
+    const maybe_daymonth = metadata.getFirst("TDAT") orelse metadata.getFirst("TDA");
     if (isValidDateComponent(maybe_daymonth)) {
         const daymonth = maybe_daymonth.?;
         date = date_buf[0..10];
         // TDAT is DDMM, we want -MM-DD
-        var day = daymonth[0..2];
-        var month = daymonth[2..4];
+        const day = daymonth[0..2];
+        const month = daymonth[2..4];
         _ = try std.fmt.bufPrint(date[4..10], "-{s}-{s}", .{ month, day });
 
-        var maybe_time = metadata.getFirst("TIME") orelse metadata.getFirst("TIM");
+        const maybe_time = metadata.getFirst("TIME") orelse metadata.getFirst("TIM");
         if (isValidDateComponent(maybe_time)) {
             const time = maybe_time.?;
             date = date_buf[0..];
             // TIME is HHMM
-            var hours = time[0..2];
-            var mins = time[2..4];
+            const hours = time[0..2];
+            const mins = time[2..4];
             _ = try std.fmt.bufPrint(date[10..], " {s}:{s}", .{ hours, mins });
         }
     }
@@ -283,7 +283,7 @@ fn compareMetadata(allocator: Allocator, expected: *MetadataArray, actual: *Meta
         if (std.mem.startsWith(u8, field.name, "Songs-DB")) continue;
 
         if (actual.contains(field.name)) {
-            var num_values = actual.valueCount(field.name).?;
+            const num_values = actual.valueCount(field.name).?;
             // all duplicates should already be coalesced, since ffmpeg hates duplicates
             std.testing.expectEqual(num_values, 1) catch |e| {
                 std.debug.print("\nexpected:\n", .{});
@@ -293,7 +293,7 @@ fn compareMetadata(allocator: Allocator, expected: *MetadataArray, actual: *Meta
                     }
                 }
                 std.debug.print("\nactual:\n", .{});
-                var values = (try actual.getAllAlloc(allocator, field.name)).?;
+                const values = (try actual.getAllAlloc(allocator, field.name)).?;
                 defer allocator.free(values);
 
                 for (values) |val| {
@@ -301,7 +301,7 @@ fn compareMetadata(allocator: Allocator, expected: *MetadataArray, actual: *Meta
                 }
                 return e;
             };
-            var actual_value = actual.getFirst(field.name).?;
+            const actual_value = actual.getFirst(field.name).?;
 
             std.testing.expectEqualStrings(field.value, actual_value) catch |e| {
                 std.debug.print("field: {s}\n", .{fmtUtf8SliceEscapeUpper(field.name)});
@@ -382,7 +382,7 @@ fn getFFProbeMetadata(allocator: Allocator, cwd: ?std.fs.Dir, filepath: []const 
     const metadata_start = maybe_metadata_start.? + metadata_start_string.len;
     const metadata_text = result.stderr[metadata_start..];
 
-    var indentation = try allocator.alloc(u8, metadata_line_indent_size + 2);
+    const indentation = try allocator.alloc(u8, metadata_line_indent_size + 2);
     defer allocator.free(indentation);
     std.mem.set(u8, indentation, ' ');
 
@@ -391,10 +391,10 @@ fn getFFProbeMetadata(allocator: Allocator, cwd: ?std.fs.Dir, filepath: []const 
         if (!std.mem.startsWith(u8, line, indentation)) break;
 
         var field_it = std.mem.split(u8, line, ":");
-        var name = std.mem.trim(u8, field_it.next().?, " ");
+        const name = std.mem.trim(u8, field_it.next().?, " ");
         if (name.len == 0) continue;
         // TODO multiline values
-        var value = field_it.rest()[1..];
+        const value = field_it.rest()[1..];
 
         try metadata.append(MetadataArray.Field{
             .name = try allocator.dupe(u8, name),

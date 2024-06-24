@@ -32,7 +32,7 @@ pub fn zigMain() !void {
         // when debugging, it helps a lot to get the context of where the failing alloc
         // actually occured, so further wrap the failing allocator to get a stack
         // trace at the point of the OutOfMemory return.
-        var allocator: Allocator = allocator: {
+        const allocator: Allocator = allocator: {
             // However, this will fail in the AFL-compiled version because it
             // panics when trying to print a stack trace, so only do this when
             // we are compiling the debug version of this code with the Zig compiler

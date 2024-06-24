@@ -4,7 +4,7 @@ const assert = std.debug.assert;
 
 pub fn main() anyerror!void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer assert(gpa.deinit() == false);
+    defer assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
     var args = try std.process.argsAlloc(allocator);
@@ -17,7 +17,7 @@ pub fn main() anyerror!void {
         var metadata = try audiometa.metadata.readAll(allocator, &stream_source);
         defer metadata.deinit();
 
-        for (metadata.tags) |tag, i| {
+        for (metadata.tags, 0..) |tag, i| {
             switch (tag) {
                 .id3v1 => |*id3v1_meta| {
                     std.debug.print("\n#{}: ID3v1 Tag\n=============\n", .{i + 1});
