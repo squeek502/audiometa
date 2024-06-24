@@ -98,19 +98,19 @@ pub fn OggPageReader(comptime ReaderType: type) type {
                         self.data_remaining = length;
                     },
                     .data => {
-                        while (self.data_remaining > 0 and num_read < dest.len) {
-                            const byte = self.child_reader.readByte() catch |err| switch (err) {
-                                error.EndOfStream => return error.TruncatedData,
-                                else => |e| return e,
-                            };
-                            dest[num_read] = byte;
-                            num_read += 1;
-                            self.data_remaining -= 1;
+                        const chunk_len = @min(self.data_remaining, dest.len - num_read);
+                        self.child_reader.readNoEof(dest[num_read..][0..chunk_len]) catch |err| switch (err) {
+                            error.EndOfStream => return error.TruncatedData,
+                            else => |e| return e,
+                        };
+                        num_read += chunk_len;
+                        self.data_remaining -= chunk_len;
+
+                        if (self.data_remaining == 0) {
+                            self.read_state = .header;
                         }
                         if (num_read == dest.len) {
                             break;
-                        } else {
-                            self.read_state = .header;
                         }
                     },
                     .done => {
