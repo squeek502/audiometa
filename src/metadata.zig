@@ -52,7 +52,7 @@ pub fn readAll(allocator: Allocator, stream_source: *std.io.StreamSource) !AllMe
     }
 
     var time_taken = timer.read();
-    std.debug.print("setup: {}us\n", .{time_taken / time.ns_per_us});
+    //std.debug.print("setup: {}us\n", .{time_taken / time.ns_per_us});
     timer.reset();
 
     // TODO: this won't handle id3v2 when a SEEK frame is used
@@ -139,7 +139,7 @@ pub fn readAll(allocator: Allocator, stream_source: *std.io.StreamSource) !AllMe
     }
 
     time_taken = timer.read();
-    std.debug.print("prefixed tags: {}us\n", .{time_taken / time.ns_per_us});
+    //std.debug.print("prefixed tags: {}us\n", .{time_taken / time.ns_per_us});
     timer.reset();
 
     const end_pos = try seekable_stream.getEndPos();
@@ -209,7 +209,7 @@ pub fn readAll(allocator: Allocator, stream_source: *std.io.StreamSource) !AllMe
     }
 
     time_taken = timer.read();
-    std.debug.print("suffixed tags: {}us\n", .{time_taken / time.ns_per_us});
+    //std.debug.print("suffixed tags: {}us\n", .{time_taken / time.ns_per_us});
     timer.reset();
 
     return AllMetadata{
