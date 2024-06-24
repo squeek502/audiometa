@@ -20,24 +20,45 @@ pub fn OggPageReader(comptime ReaderType: type) type {
         const ReadState = enum {
             header,
             data,
+            done,
         };
 
-        pub const OggHeaderReadError = error{
+        pub const OggPageReadError = error{
             InvalidStreamMarker,
             UnknownStreamStructureVersion,
             ZeroLengthPage,
+            TruncatedHeader,
+            TruncatedData,
         };
-        pub const Error = error{EndOfStream} || OggHeaderReadError || ReaderType.Error;
+        pub const Error = OggPageReadError || ReaderType.Error;
         pub const Reader = io.Reader(*Self, Error, read);
 
         const Self = @This();
 
         pub fn read(self: *Self, dest: []u8) Error!usize {
+            return self.readEofOnTruncatedHeader(dest) catch |err| switch (err) {
+                error.EndOfStream => return error.TruncatedHeader,
+                else => |e| return e,
+            };
+        }
+
+        // This is separated out only as a convenience, in order to be able to translate all
+        // EndOfStream errors to TruncatedHeader errors at the callsite
+        fn readEofOnTruncatedHeader(self: *Self, dest: []u8) (error{EndOfStream} || Error)!usize {
             var num_read: usize = 0;
             while (true) {
                 switch (self.read_state) {
                     .header => {
-                        var stream_marker = try self.child_reader.readBytesNoEof(4);
+                        // Getting EOF while reading the first bytes of the header just means that
+                        // there is no data left to read. After we've read a stream marker, though,
+                        // hitting EOF is treated as fatal.
+                        var stream_marker = self.child_reader.readBytesNoEof(4) catch |err| switch (err) {
+                            error.EndOfStream => {
+                                self.read_state = .done;
+                                continue;
+                            },
+                            else => |e| return e,
+                        };
                         if (!std.mem.eql(u8, stream_marker[0..], ogg_stream_marker)) {
                             return error.InvalidStreamMarker;
                         }
@@ -78,7 +99,10 @@ pub fn OggPageReader(comptime ReaderType: type) type {
                     },
                     .data => {
                         while (self.data_remaining > 0 and num_read < dest.len) {
-                            const byte = try self.child_reader.readByte();
+                            const byte = self.child_reader.readByte() catch |err| switch (err) {
+                                error.EndOfStream => return error.TruncatedData,
+                                else => |e| return e,
+                            };
                             dest[num_read] = byte;
                             num_read += 1;
                             self.data_remaining -= 1;
@@ -88,6 +112,9 @@ pub fn OggPageReader(comptime ReaderType: type) type {
                         } else {
                             self.read_state = .header;
                         }
+                    },
+                    .done => {
+                        return num_read;
                     },
                 }
             }
@@ -102,4 +129,22 @@ pub fn OggPageReader(comptime ReaderType: type) type {
 
 pub fn oggPageReader(underlying_stream: anytype) OggPageReader(@TypeOf(underlying_stream)) {
     return .{ .child_reader = underlying_stream };
+}
+
+test oggPageReader {
+    const data = "OggS\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\xbc\xf2O\x00\x00\x00\x00\x00\xbe\x9d\xbfd\x01\x1e\x01vorbis\x00\x00\x00\x00\x02D\xac\x00\x00\x00\x00\x00\x00\x03q\x02\x00\x00\x00\x00\x00\xb8\x01OggS\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xbc\xf2O\x00\x01\x00\x00\x00\x11\r\xc6\xa1\x01?\x03vorbis\x1d\x00\x00\x00Xiph.Org libVorbis I 20020717\x06\x00\x00\x00\x0b\x00\x00\x00TITLE=Paria\x10\x00\x00\x00OggS\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xbc\xf2O\x00\x01\x00\x00\x00\x11\r\xc6\xa1\x01jARTIST=TROMATISM\x0c\x00\x00\x00ALBUM=PIRATE\n\x00\x00\x00GENRE=PUNK%\x00\x00\x00COMMENT=http://www.sauve-qui-punk.org\x0e\x00\x00\x00TRACKNUMBER=20\x01";
+    var fbs = std.io.fixedBufferStream(data);
+
+    var ogg_page_reader = oggPageReader(fbs.reader());
+    var buf_reader = std.io.bufferedReader(ogg_page_reader.reader());
+    const reader = buf_reader.reader();
+
+    const result = try reader.readAllAlloc(std.testing.allocator, std.math.maxInt(usize));
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualSlices(
+        u8,
+        "\x01vorbis\x00\x00\x00\x00\x02D\xac\x00\x00\x00\x00\x00\x00\x03q\x02\x00\x00\x00\x00\x00\xb8\x01\x03vorbis\x1d\x00\x00\x00Xiph.Org libVorbis I 20020717\x06\x00\x00\x00\x0b\x00\x00\x00TITLE=Paria\x10\x00\x00\x00ARTIST=TROMATISM\x0c\x00\x00\x00ALBUM=PIRATE\n\x00\x00\x00GENRE=PUNK%\x00\x00\x00COMMENT=http://www.sauve-qui-punk.org\x0e\x00\x00\x00TRACKNUMBER=20\x01",
+        result,
+    );
 }

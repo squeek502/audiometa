@@ -16,6 +16,7 @@ pub const constrained_stream = @import("constrained_stream.zig");
 pub const util = @import("util.zig");
 pub const collate = @import("collate.zig");
 pub const case_fold = @import("case_fold.zig");
+pub const ogg = @import("ogg.zig");
 
 test {
     std.testing.refAllDecls(@This());
