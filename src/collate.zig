@@ -9,6 +9,7 @@ const id3v2_data = @import("id3v2_data.zig");
 const case_fold = @import("case_fold.zig");
 const windows1251 = @import("windows1251.zig");
 const fields = @import("fields.zig");
+const Normalize = @import("Normalize");
 
 pub const Collator = struct {
     metadata: *AllMetadata,
@@ -16,6 +17,7 @@ pub const Collator = struct {
     arena: std.heap.ArenaAllocator,
     config: Config,
     tag_indexes_by_priority: []usize,
+    norm_data: ?*const Normalize.NormData,
 
     const Self = @This();
 
@@ -23,11 +25,25 @@ pub const Collator = struct {
         prioritization: Prioritization = default_prioritization,
         duplicate_tag_strategy: DuplicateTagStrategy = .prioritize_best,
 
-        // TODO: Reinstate normalization
-        // /// If a normalizer is provided, it will allow for de-duplicating across
-        // /// different-but-equal UTF-8 grapheme forms. For example:
-        // /// - é (U+00E9 LATIN SMALL LETTER E WITH ACUTE)
-        // /// - e (U+0065 LATIN SMALL LETTER E) followed by U+0301 COMBINING ACUTE ACCENT
+        /// Normalization allows for de-duplicating across different-but-equal
+        /// Unicode grapheme forms. For example:
+        /// - é (U+00E9 LATIN SMALL LETTER E WITH ACUTE)
+        /// - e (U+0065 LATIN SMALL LETTER E) followed by U+0301 COMBINING ACUTE ACCENT
+        ///
+        /// By default, normalization is enabled and each Collator will initialize their own
+        /// copy the relevant data. If multiple Collators are being used, it is recommended
+        /// to initialize that data once and provide it to each Collator via this field instead.
+        normalization: Normalization = .{ .init = {} },
+
+        pub const Normalization = union(enum) {
+            /// Normalization will not be performed when de-duplicating strings.
+            none: void,
+            /// Provided to allow re-using the same NormData between Collator instances,
+            /// since there is a cost to NormData.init.
+            data: *const Normalize.NormData,
+            /// NormData.init will be called during Collator.init
+            init: void,
+        };
 
         pub const DuplicateTagStrategy = enum {
             /// Use a heuristic to prioritize the 'best' tag for any tag types with multiple tags,
@@ -55,8 +71,19 @@ pub const Collator = struct {
             .arena = std.heap.ArenaAllocator.init(allocator),
             .config = config,
             .tag_indexes_by_priority = &[_]usize{},
+            .norm_data = undefined,
         };
         errdefer collator.deinit();
+
+        collator.norm_data = switch (config.normalization) {
+            .none => null,
+            .data => |ptr| ptr,
+            .init => init: {
+                const norm_data = try collator.arena.allocator().create(Normalize.NormData);
+                try norm_data.init(collator.arena.allocator());
+                break :init norm_data;
+            },
+        };
 
         switch (config.duplicate_tag_strategy) {
             .prioritize_best => {
@@ -218,8 +245,9 @@ pub const Collator = struct {
     }
 
     pub fn getValuesFromKeys(self: *Self, keys: fields.NameLookups) Allocator.Error![][]const u8 {
-        var set = CollatedTextSet.init(self.arena.allocator());
-        defer set.deinit();
+        var set = CollatedTextSet.init(self.arena.allocator(), .{
+            .normalization = if (self.norm_data) |norm_data| .{ .data = norm_data } else .{ .none = {} },
+        });
 
         var value_it = self.prioritizedValueIterator(keys);
         while (value_it.next()) |entry| {
@@ -838,36 +866,57 @@ const CollatedTextSet = struct {
     //       hash/eql instead
     normalized_set: std.StringHashMapUnmanaged(usize),
     arena: Allocator,
+    norm_data: ?*const Normalize.NormData,
 
     const Self = @This();
 
+    pub const Config = struct {
+        normalization: union(enum) {
+            none: void,
+            data: *const Normalize.NormData,
+        } = .{ .none = {} },
+    };
+
     /// Allocator must be an arena that will get cleaned up outside of
     /// this struct (this struct's deinit will not handle cleaning up the arena)
-    pub fn init(arena: Allocator) Self {
+    pub fn init(arena: Allocator, config: Config) Self {
         return .{
             .values = std.ArrayListUnmanaged([]const u8){},
             .normalized_set = std.StringHashMapUnmanaged(usize){},
             .arena = arena,
+            .norm_data = switch (config.normalization) {
+                .none => null,
+                .data => |data| data,
+            },
         };
-    }
-
-    pub fn deinit(self: *Self) void {
-        // TODO: If this uses an arena, this isn't necessary
-        self.values.deinit(self.arena);
-        self.normalized_set.deinit(self.arena);
     }
 
     pub fn put(self: *Self, value: []const u8) Allocator.Error!void {
         const ameliorated_canonical = (try ameliorateCanonical(self.arena, value)) orelse return;
         var case_fold_buf = try std.ArrayList(u8).initCapacity(self.arena, ameliorated_canonical.len);
+        // TODO: Can `ameliorated_canonical` be invalid UTF-8 at this point?
+        try case_fold.caseFoldUtf8Writer(case_fold_buf.writer(), ameliorated_canonical);
+        var form_for_deduplication = case_fold_buf.items;
 
-        case_fold.caseFoldUtf8Writer(case_fold_buf.writer(), ameliorated_canonical) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-        };
+        if (self.norm_data) |norm_data| {
+            var codepoints = try std.ArrayList(u21).initCapacity(self.arena, form_for_deduplication.len);
+            var it = std.unicode.Utf8Iterator{ .bytes = form_for_deduplication, .i = 0 };
+            while (it.nextCodepoint()) |codepoint| {
+                try codepoints.append(codepoint);
+            }
+            var normalizer = Normalize{ .norm_data = norm_data };
+            const nfd = try normalizer.nfdCodePoints(self.arena, codepoints.items);
 
-        // TODO: Unicode normalization
+            var nfd_utf8 = try std.ArrayList(u8).initCapacity(self.arena, nfd.len);
+            for (nfd) |codepoint| {
+                var buf: [4]u8 = undefined;
+                const utf8_len = std.unicode.utf8Encode(codepoint, &buf) catch unreachable;
+                try nfd_utf8.appendSlice(buf[0..utf8_len]);
+            }
+            form_for_deduplication = nfd_utf8.items;
+        }
 
-        const result = try self.normalized_set.getOrPut(self.arena, case_fold_buf.items);
+        const result = try self.normalized_set.getOrPut(self.arena, form_for_deduplication);
         if (!result.found_existing) {
             const index = self.values.items.len;
             try self.values.append(self.arena, ameliorated_canonical);
@@ -884,8 +933,7 @@ test "CollatedTextSet utf-8 case-insensitivity" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    var set = CollatedTextSet.init(arena.allocator());
-    defer set.deinit();
+    var set = CollatedTextSet.init(arena.allocator(), .{});
 
     try set.put("something");
     try set.put("someTHING");
@@ -899,14 +947,13 @@ test "CollatedTextSet utf-8 case-insensitivity" {
 }
 
 test "CollatedTextSet utf-8 normalization" {
-    // TODO: Reinstate normalization and re-enable
-    if (true) return error.SkipZigTest;
-
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    var set = CollatedTextSet.init(arena.allocator());
-    defer set.deinit();
+    var norm_data: Normalize.NormData = undefined;
+    try Normalize.NormData.init(&norm_data, arena.allocator());
+
+    var set = CollatedTextSet.init(arena.allocator(), .{ .normalization = .{ .data = &norm_data } });
 
     try set.put("foé");
     try set.put("foe\u{0301}");
@@ -918,8 +965,7 @@ test "CollatedTextSet windows-1251 detection" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    var set = CollatedTextSet.init(arena.allocator());
-    defer set.deinit();
+    var set = CollatedTextSet.init(arena.allocator(), .{});
 
     // Note: the Latin-1 bytes here are "\xC0\xEF\xEE\xF1\xF2\xF0\xEE\xF4"
     try set.put("Àïîñòðîô");

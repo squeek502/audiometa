@@ -4,8 +4,17 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const mode = b.standardOptimizeOption(.{});
 
+    const zg = b.dependency("zg", .{
+        .target = target,
+        .optimize = mode,
+    });
+    const normalize_module = zg.module("Normalize");
+
     const audiometa = b.addModule("audiometa", .{
         .root_source_file = b.path("src/audiometa.zig"),
+        .imports = &.{
+            .{ .name = "Normalize", .module = normalize_module },
+        },
     });
 
     const exe = b.addExecutable(.{
@@ -27,6 +36,7 @@ pub fn build(b: *std.Build) void {
         .optimize = mode,
         .filter = test_filter,
     });
+    tests.root_module.addImport("Normalize", normalize_module);
     const run_tests = b.addRunArtifact(tests);
 
     const test_lib_step = b.step("test-lib", "Run all library tests (without parse tests)");
