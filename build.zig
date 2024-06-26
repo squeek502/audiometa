@@ -97,6 +97,16 @@ pub fn build(b: *std.Build) void {
     synchsafe_exe.root_module.addImport("audiometa", audiometa);
     b.installArtifact(synchsafe_exe);
 
+    const gen_case_fold_exe = b.addExecutable(.{
+        .name = "gen_case_fold",
+        .root_source_file = b.path("tools/gen_case_fold.zig"),
+        .target = target,
+        .optimize = mode,
+    });
+    const gen_case_fold_install = b.addInstallArtifact(gen_case_fold_exe, .{});
+    const gen_case_fold_step = b.step("gen_case_fold", "Build executable to generate arrays for case_fold.zig");
+    gen_case_fold_step.dependOn(&gen_case_fold_install.step);
+
     // Fuzz
 
     _ = addFuzzer(b, "fuzz", &.{}, audiometa, target) catch unreachable;
