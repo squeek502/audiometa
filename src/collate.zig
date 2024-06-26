@@ -896,24 +896,15 @@ const CollatedTextSet = struct {
         var case_fold_buf = try std.ArrayList(u8).initCapacity(self.arena, ameliorated_canonical.len);
         // TODO: Can `ameliorated_canonical` be invalid UTF-8 at this point?
         try case_fold.caseFoldUtf8Writer(case_fold_buf.writer(), ameliorated_canonical);
-        var form_for_deduplication = case_fold_buf.items;
+        var form_for_deduplication: []const u8 = case_fold_buf.items;
 
         if (self.norm_data) |norm_data| {
-            var codepoints = try std.ArrayList(u21).initCapacity(self.arena, form_for_deduplication.len);
-            var it = std.unicode.Utf8Iterator{ .bytes = form_for_deduplication, .i = 0 };
-            while (it.nextCodepoint()) |codepoint| {
-                try codepoints.append(codepoint);
-            }
             var normalizer = Normalize{ .norm_data = norm_data };
-            const nfd = try normalizer.nfdCodePoints(self.arena, codepoints.items);
-
-            var nfd_utf8 = try std.ArrayList(u8).initCapacity(self.arena, nfd.len);
-            for (nfd) |codepoint| {
-                var buf: [4]u8 = undefined;
-                const utf8_len = std.unicode.utf8Encode(codepoint, &buf) catch unreachable;
-                try nfd_utf8.appendSlice(buf[0..utf8_len]);
-            }
-            form_for_deduplication = nfd_utf8.items;
+            const nfd = normalizer.nfd(self.arena, form_for_deduplication) catch |err| switch (err) {
+                error.OutOfMemory => |e| return e,
+                error.Utf8CannotEncodeSurrogateHalf, error.CodepointTooLarge => unreachable,
+            };
+            form_for_deduplication = nfd.slice;
         }
 
         const result = try self.normalized_set.getOrPut(self.arena, form_for_deduplication);
