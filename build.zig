@@ -86,7 +86,7 @@ pub fn build(b: *std.Build) void {
         .optimize = mode,
     });
     extract_tag_exe.root_module.addImport("audiometa", audiometa);
-    b.installArtifact(extract_tag_exe);
+    const extract_tag_exe_install = b.addInstallArtifact(extract_tag_exe, .{});
 
     const synchsafe_exe = b.addExecutable(.{
         .name = "synchsafe",
@@ -95,7 +95,11 @@ pub fn build(b: *std.Build) void {
         .optimize = mode,
     });
     synchsafe_exe.root_module.addImport("audiometa", audiometa);
-    b.installArtifact(synchsafe_exe);
+    const synchsafe_exe_install = b.addInstallArtifact(synchsafe_exe, .{});
+
+    const tools_step = b.step("tools", "Build/install extract_tag and synchsafe tools");
+    tools_step.dependOn(&extract_tag_exe_install.step);
+    tools_step.dependOn(&synchsafe_exe_install.step);
 
     const gen_case_fold_exe = b.addExecutable(.{
         .name = "gen_case_fold",
