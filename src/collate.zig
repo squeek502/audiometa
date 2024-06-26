@@ -31,7 +31,7 @@ pub const Collator = struct {
         /// - e (U+0065 LATIN SMALL LETTER E) followed by U+0301 COMBINING ACUTE ACCENT
         ///
         /// By default, normalization is enabled and each Collator will initialize their own
-        /// copy the relevant data. If multiple Collators are being used, it is recommended
+        /// copy of the relevant data. If multiple Collators are being used, it is recommended
         /// to initialize that data once and provide it to each Collator via this field instead.
         normalization: Normalization = .{ .init = {} },
 
