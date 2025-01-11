@@ -900,10 +900,7 @@ const CollatedTextSet = struct {
 
         if (self.norm_data) |norm_data| {
             var normalizer = Normalize{ .norm_data = norm_data };
-            const nfd = normalizer.nfd(self.arena, form_for_deduplication) catch |err| switch (err) {
-                error.OutOfMemory => |e| return e,
-                error.Utf8CannotEncodeSurrogateHalf, error.CodepointTooLarge => unreachable,
-            };
+            const nfd = try normalizer.nfd(self.arena, form_for_deduplication);
             form_for_deduplication = nfd.slice;
         }
 

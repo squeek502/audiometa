@@ -3,8 +3,9 @@
     .version = "0.1.0",
     .dependencies = .{
         .zg = .{
-            .url = "https://codeberg.org/dude_the_builder/zg/archive/v0.13.1.tar.gz",
-            .hash = "12200d1ce5f9733a9437415d85665ad5fbc85a4d27689fd337fecad8014acffe3aa5",
+            // Temporary, switch back to atman/zg once https://codeberg.org/atman/zg/pulls/25 is merged
+            .url = "https://codeberg.org/e0328eric/zg/archive/ba5c8afa1b3fe10eb4c626201dde2dc9e1196ec7.tar.gz",
+            .hash = "1220f3e29bc40856bfc06e0ee133f814b0011c76de987d8a6a458c2f34d82708899a",
         },
     },
     .paths = .{
