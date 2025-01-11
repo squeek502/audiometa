@@ -386,11 +386,11 @@ fn getFFProbeMetadata(allocator: Allocator, cwd: ?std.fs.Dir, filepath: []const 
     defer allocator.free(indentation);
     std.mem.set(u8, indentation, ' ');
 
-    var line_it = std.mem.split(u8, metadata_text, "\n");
+    var line_it = std.mem.splitScalar(u8, metadata_text, '\n');
     while (line_it.next()) |line| {
         if (!std.mem.startsWith(u8, line, indentation)) break;
 
-        var field_it = std.mem.split(u8, line, ":");
+        var field_it = std.mem.splitScalar(u8, line, ':');
         const name = std.mem.trim(u8, field_it.next().?, " ");
         if (name.len == 0) continue;
         // TODO multiline values

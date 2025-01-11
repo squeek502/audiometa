@@ -45,7 +45,7 @@ pub fn readComment(allocator: Allocator, reader: anytype, seekable_stream: anyty
             continue;
         }
 
-        var split_it = std.mem.split(u8, comment, "=");
+        var split_it = std.mem.splitScalar(u8, comment, '=');
         const field = split_it.next() orelse return error.InvalidCommentField;
         const value = split_it.rest();
 

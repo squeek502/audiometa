@@ -366,7 +366,7 @@ pub const EncodedTextIterator = struct {
                 }
                 val_no_bom = bytes_as_utf16[1..];
             }
-            const utf8_end = std.unicode.utf16leToUtf8(self.utf8_buf, val_no_bom) catch return error.InvalidUTF16Data;
+            const utf8_end = std.unicode.utf16LeToUtf8(self.utf8_buf, val_no_bom) catch return error.InvalidUTF16Data;
             return self.utf8_buf[0..utf8_end];
         } else {
             if (!std.unicode.utf8ValidateSlice(val_bytes)) return error.InvalidUTF8Data;

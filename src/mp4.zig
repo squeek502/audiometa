@@ -314,7 +314,7 @@ pub fn readMetadataItem(allocator: Allocator, reader: anytype, seekable_stream: 
                     }
 
                     // convert to UTF-8
-                    const value_utf8 = std.unicode.utf16leToUtf8Alloc(allocator, value_utf16) catch |err| switch (err) {
+                    const value_utf8 = std.unicode.utf16LeToUtf8Alloc(allocator, value_utf16) catch |err| switch (err) {
                         error.OutOfMemory => return error.OutOfMemory,
                         else => return error.InvalidUTF16Data,
                     };

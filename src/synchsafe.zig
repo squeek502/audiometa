@@ -2,9 +2,9 @@ const std = @import("std");
 const assert = std.debug.assert;
 
 pub fn EncodedType(comptime T: type) type {
-    comptime assert(@typeInfo(T) == .Int);
-    comptime assert(@typeInfo(T).Int.signedness == .unsigned);
-    const num_bits = @typeInfo(T).Int.bits;
+    comptime assert(@typeInfo(T) == .int);
+    comptime assert(@typeInfo(T).int.signedness == .unsigned);
+    const num_bits = @typeInfo(T).int.bits;
     const num_bytes_ceil = try std.math.divCeil(comptime_int, num_bits, 8);
     const num_zero_bits_available = (num_bytes_ceil * 8) - num_bits;
     const num_zero_bits_needed = num_bytes_ceil;
@@ -16,9 +16,9 @@ pub fn EncodedType(comptime T: type) type {
 }
 
 pub fn DecodedType(comptime T: type) type {
-    comptime assert(@typeInfo(T) == .Int);
-    comptime assert(@typeInfo(T).Int.signedness == .unsigned);
-    const num_bits = @typeInfo(T).Int.bits;
+    comptime assert(@typeInfo(T) == .int);
+    comptime assert(@typeInfo(T).int.signedness == .unsigned);
+    const num_bits = @typeInfo(T).int.bits;
     comptime assert(num_bits % 8 == 0);
     const num_bytes = num_bits / 8;
     // every byte has 1 unavailable bit
@@ -28,7 +28,7 @@ pub fn DecodedType(comptime T: type) type {
 
 pub fn decode(comptime T: type, x: T) DecodedType(T) {
     var out: T = 0;
-    var mask: T = 0x7F << (@typeInfo(T).Int.bits - 8);
+    var mask: T = 0x7F << (@typeInfo(T).int.bits - 8);
 
     while (mask != 0) {
         out >>= 1;
@@ -46,7 +46,7 @@ pub fn encode(comptime T: type, x: T) EncodedType(T) {
 
     // compute masks at compile time so that we can handle any
     // sized integer without any runtime cost
-    const byte_count = @typeInfo(OutType).Int.bits / 8;
+    const byte_count = @typeInfo(OutType).int.bits / 8;
     const byte_masks = comptime blk: {
         var masks_array: [byte_count]OutType = undefined;
         masks_array[0] = 0x7F;
@@ -83,9 +83,9 @@ pub fn isSliceSynchsafe(bytes: []const u8) bool {
 /// Returns true if the given integer has no non-synchsafe
 /// bytes within it.
 pub fn areIntBytesSynchsafe(comptime T: type, x: T) bool {
-    comptime assert(@typeInfo(T) == .Int);
-    comptime assert(@typeInfo(T).Int.signedness == .unsigned);
-    const num_bits = @typeInfo(T).Int.bits;
+    comptime assert(@typeInfo(T) == .int);
+    comptime assert(@typeInfo(T).int.signedness == .unsigned);
+    const num_bits = @typeInfo(T).int.bits;
     if (num_bits < 8) return true;
 
     const mask: T = comptime mask: {
@@ -110,8 +110,8 @@ pub fn areIntBytesSynchsafe(comptime T: type, x: T) bool {
 /// has the opposite guarantee--the encoded and decoded values
 /// will always differ.
 pub fn isBelowSynchsafeThreshold(comptime T: type, x: T) bool {
-    comptime assert(@typeInfo(T) == .Int);
-    comptime assert(@typeInfo(T).Int.signedness == .unsigned);
+    comptime assert(@typeInfo(T) == .int);
+    comptime assert(@typeInfo(T).int.signedness == .unsigned);
     return std.math.maxInt(T) < 128 or x < 128;
 }
 

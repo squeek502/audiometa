@@ -226,7 +226,7 @@ pub const MetadataType = enum {
     vorbis,
     mp4,
 
-    pub const num_types = @typeInfo(MetadataType).Enum.fields.len;
+    pub const num_types = @typeInfo(MetadataType).@"enum".fields.len;
 };
 
 pub const TypedMetadata = union(MetadataType) {
@@ -391,7 +391,7 @@ pub const AllMetadata = struct {
 
     pub fn countIgnoringDuplicates(self: AllMetadata) usize {
         var count: usize = 0;
-        inline for (@typeInfo(MetadataType).Enum.fields) |enum_field| {
+        inline for (@typeInfo(MetadataType).@"enum".fields) |enum_field| {
             const tag_type: MetadataType = @enumFromInt(enum_field.value);
             if (self.getFirstMetadataOfType(tag_type) != null) {
                 count += 1;

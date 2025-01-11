@@ -8,7 +8,7 @@ const MetadataType = @import("metadata.zig").MetadataType;
 // causes a compile error. This should not cause any false positives
 // since it's assumed any MetadataType will at least have an artist field.
 comptime {
-    for (@typeInfo(MetadataType).Enum.fields) |enum_field| {
+    for (@typeInfo(MetadataType).@"enum".fields) |enum_field| {
         if (artist[enum_field.value] == null) {
             const msg = std.fmt.comptimePrint("Found null field name for MetadataType '{s}' in artist lookup table. Note: Also double check that all other field lookup tables are populated correctly for this MetadataType, as the artist lookup table is used as a canary in a coal mine.", .{enum_field.name});
             @compileError(msg);

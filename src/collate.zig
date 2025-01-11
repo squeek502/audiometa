@@ -341,7 +341,7 @@ pub const Collator = struct {
 
     fn splitTrackNumber(as_string: []const u8) TrackNumber {
         var track_number: TrackNumber = undefined;
-        var split_it = std.mem.split(u8, as_string, "/");
+        var split_it = std.mem.splitScalar(u8, as_string, '/');
 
         const number_str = split_it.next();
         track_number.number = parseNumberDisallowingZero(u32, number_str);
